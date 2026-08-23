@@ -3,8 +3,8 @@ import requests
 import streamlit as st
 
 # Streamlit Arayüz Ayarları
-st.set_page_config(page_title="BtcTurk AI Sinyal Paneli", layout="wide")
-st.title("📈 BtcTurk Canlı Kripto Analiz & Otomatik AI Tahmin Paneli")
+st.set_page_config(page_title="BtcTurk AI & AquiverAI Bot", layout="wide")
+st.title("📈 BtcTurk Canlı Analiz & AquiverAI Trading Botu")
 
 
 # BtcTurk API'den Tüm Verileri Çekme ve AI Analizi Yapma
@@ -24,7 +24,6 @@ def get_all_pairs_analysis():
                 high = float(item["high"])
                 low = float(item["low"])
 
-                # Volatilite ve AI Potansiyel Oranı
                 volatility = ((high - low) / low) * 100 if low > 0 else 5.0
                 ai_profit_margin = round(
                     max(2.5, min(volatility / 2, 100.0)), 1
@@ -61,18 +60,24 @@ def get_all_pairs_analysis():
 
 df_analysis = get_all_pairs_analysis()
 
+# --- AQUIVER AI SİMÜLASYON HAFIZASI ---
+if "bot_balance" not in st.session_state:
+    st.session_state.bot_balance = 10000.0  # $10,000 Başlangıç Sanal Bakiyesi
+if "bot_positions" not in st.session_state:
+    st.session_state.bot_positions = {}  # Açık pozisyonlar
+if "trade_history" not in st.session_state:
+    st.session_state.trade_history = []  # İşlem geçmişi
+
 if not df_analysis.empty:
     pairs_list = df_analysis["pair"].tolist()
 
-    # Session State (Seçili Coini Hafızada Tutma)
     if "selected_coin" not in st.session_state:
         st.session_state.selected_coin = pairs_list[0]
 
     # --- SOL MENÜ ---
     st.sidebar.subheader("📌 Coin Seçimi")
-
     selected_from_select = st.sidebar.selectbox(
-        "Analiz Edilecek Coini Seçin:",
+        "Analiz Edilecek Coin:",
         pairs_list,
         index=pairs_list.index(st.session_state.selected_coin)
         if st.session_state.selected_coin in pairs_list
@@ -85,15 +90,13 @@ if not df_analysis.empty:
 
     st.sidebar.markdown("---")
     st.sidebar.subheader("🔥 AI Potansiyel Sıralaması")
-    st.sidebar.caption("Tıklayarak grafiğini açabilirsiniz:")
-
     for _, row in df_analysis.iterrows():
         symbol_name = row["pair"]
-        if row["is_bullish"]:
-            label = f"🟢 {symbol_name}: +%{row['profit_margin']}"
-        else:
-            label = f"🔴 {symbol_name}: -%{row['stop_margin']}"
-
+        label = (
+            f"🟢 {symbol_name}: +%{row['profit_margin']}"
+            if row["is_bullish"]
+            else f"🔴 {symbol_name}: -%{row['stop_margin']}"
+        )
         if st.sidebar.button(label, key=f"btn_{symbol_name}"):
             st.session_state.selected_coin = symbol_name
             st.rerun()
@@ -113,48 +116,82 @@ if not df_analysis.empty:
     target_price = price * (1 + ai_profit_margin / 100)
     stop_price = price * (1 - ai_stop_margin / 100)
 
+    # 🤖 AQUIVER AI OTO-TRADING MOTORU (HER YENİLEMEDE KONTROL EDER)
+    # 1. Açık Pozisyon Kâr/Zarar Kontrolü
+    if selected_pair in st.session_state.bot_positions:
+        pos = st.session_state.bot_positions[selected_pair]
+        entry_p = pos["entry_price"]
+        pnl_pct = ((price - entry_p) / entry_p) * 100
+
+        # Kâr Al (Take Profit) veya Erken Stop-Loss
+        if pnl_pct >= ai_profit_margin or pnl_pct <= -ai_stop_margin:
+            sold_amount = pos["amount"] * price
+            st.session_state.bot_balance += sold_amount
+            status_text = "KÂR İLE KAPATILDI" if pnl_pct > 0 else "ZARAR KES (STOP) YAPILDI"
+            st.session_state.trade_history.append(
+                {
+                    "Coin": selected_pair,
+                    "Tür": "SATIŞ",
+                    "Fiyat": f"{currency}{price:,.2f}",
+                    "Kâr/Zarar": f"%{pnl_pct:.2f}",
+                    "Durum": status_text,
+                }
+            )
+            del st.session_state.bot_positions[selected_pair]
+
+    # 2. Yeni Pozisyon Açma Kontrolü (Güçlü Yükseliş Sinyali Varsa ve Bakiye Yeterliyse)
+    elif is_bullish and st.session_state.bot_balance >= 1000:
+        buy_amount_usd = 1000.0  # Her işleme $1000 ayırır
+        coin_qty = buy_amount_usd / price
+        st.session_state.bot_balance -= buy_amount_usd
+
+        st.session_state.bot_positions[selected_pair] = {
+            "entry_price": price,
+            "amount": coin_qty,
+            "cost": buy_amount_usd,
+        }
+        st.session_state.trade_history.append(
+            {
+                "Coin": selected_pair,
+                "Tür": "ALIM",
+                "Fiyat": f"{currency}{price:,.2f}",
+                "Kâr/Zarar": "%0.00",
+                "Durum": "AquiverAI Pozisyon Açtı",
+            }
+        )
+
+    # --- AQUIVER AI CANLI PANELİ ---
+    st.markdown("---")
+    st.subheader("🤖 AquiverAI Sanal Trading Portföyü")
+    b1, b2, b3 = st.columns(3)
+    b1.metric("Kasadaki Sanal Bakiye", f"${st.session_state.bot_balance:,.2f}")
+    b2.metric("Aktif Açık Pozisyon Sayısı", len(st.session_state.bot_positions))
+    b3.metric("Toplam Tamamlanan İşlem", len(st.session_state.trade_history))
+
+    if selected_pair in st.session_state.bot_positions:
+        pos = st.session_state.bot_positions[selected_pair]
+        pnl = ((price - pos["entry_price"]) / pos["entry_price"]) * 100
+        st.info(
+            f"⚡ **AquiverAI Şu An {selected_pair} Pozisyonunda!** | Alış Fiyatı: {currency}{pos['entry_price']:,.2f} | Anlık Durum: **%{pnl:.2f}**"
+        )
+
+    st.markdown("---")
+
     # Bilgi Kartları
     col1, col2, col3 = st.columns(3)
     col1.metric("Son Fiyat", f"{currency}{price:,.2f}")
     col2.metric("24s En Yüksek", f"{currency}{high:,.2f}")
     col3.metric("24s En Düşük", f"{currency}{low:,.2f}")
 
-    st.markdown("---")
-    st.subheader(f"🤖 {selected_pair} Otomatik AI Analiz & Hedef")
-
-    if is_bullish:
-        st.success(
-            f"**Durum:** 🚀 YÜKSELİŞ POTANSİYELİ YÜKSEK (AI Tahmini Yükseliş: +%{ai_profit_margin})"
-        )
-    else:
-        st.error(
-            f"**Durum:** 🔻 DÜŞÜŞ POTANSİYELİ YÜKSEK (AI Tahmini Risk: -%{ai_stop_margin})"
-        )
-
-    # Tahmini Hedef Seviyeleri
-    h1, h2 = st.columns(2)
-    h1.info(
-        f"🎯 **AI Otomatik Yükseliş Hedefi (+%{ai_profit_margin}):** {currency}{target_price:,.2f}"
-    )
-    h2.warning(
-        f"🛡️ **AI Otomatik Destek / Stop Seviyesi (-%{ai_stop_margin}):** {currency}{stop_price:,.2f}"
-    )
-
-    # TradingView Canlı Mum Grafiği
+    # TradingView Grafiği
     st.subheader("💡 Canlı Mum Grafiği")
-
     base_symbol = selected_pair.replace("TRY", "").replace("USDT", "")
-
-    # Özel Sembol Kuralları (Borsa Kısıtlamasını Kaldıran Mantık)
-    custom_symbols = {
-        "BILL": "BYBIT:BILLUSDT",  # TradingView'da Bybit borsası üzerinden direkt açar
-    }
-
-    if base_symbol in custom_symbols:
-        tv_symbol = custom_symbols[base_symbol]
-    else:
-        # Genel arama için standart kalıp
-        tv_symbol = f"BINANCE:{base_symbol}USDT"
+    custom_symbols = {"BILL": "BYBIT:BILLUSDT"}
+    tv_symbol = (
+        custom_symbols[base_symbol]
+        if base_symbol in custom_symbols
+        else f"BINANCE:{base_symbol}USDT"
+    )
 
     tradingview_html = f"""
     <div class="tradingview-widget-container">
@@ -162,5 +199,11 @@ if not df_analysis.empty:
     </div>
     """
     st.components.v1.html(tradingview_html, height=520)
-else:
-    st.warning("BtcTurk verileri şu an çekilemiyor.")
+
+    # Bot İşlem Geçmişi Tablosu
+    if st.session_state.trade_history:
+        st.subheader("📜 AquiverAI İşlem Geçmişi")
+        st.dataframe(
+            pd.DataFrame(st.session_state.trade_history).iloc[::-1],
+            use_container_width=True,
+        )
