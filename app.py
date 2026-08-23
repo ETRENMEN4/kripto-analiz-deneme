@@ -209,7 +209,7 @@ def run_aquiver_bot_cycle():
                 )
                 balance = new_balance
 
-    # 2. Yeni Pozisyon Açma (İşlem başı ₺10,000 ALIM)
+    # 2. Dinamik Sermaye Yönetimi ile Yeni Pozisyon Açma (Skor Bazlı Alım)
     bullish_candidates = df_analysis[
         (df_analysis["is_bullish"] == True)
         & (~df_analysis["pair"].isin(positions.keys()))
@@ -220,32 +220,46 @@ def run_aquiver_bot_cycle():
             ~df_analysis["pair"].isin(positions.keys())
         ]
 
-    if not bullish_candidates.empty and balance >= 10000:
+    if not bullish_candidates.empty and balance >= 1000:
         target_buy_coin = bullish_candidates.iloc[0]
         buy_symbol = str(target_buy_coin["pair"])
         buy_price = float(target_buy_coin["last"])
+        score = float(target_buy_coin["score"])
 
-        buy_amount_try = 10000.0
-        coin_qty = buy_amount_try / buy_price
-        new_balance = balance - buy_amount_try
+        # Dinamik Bütçe Hesaplama (Skora Göre)
+        if score >= 15:
+            allocated_ratio = 0.70  # %70 Bütçe
+        elif score >= 7:
+            allocated_ratio = 0.40  # %40 Bütçe
+        else:
+            allocated_ratio = 0.20  # %20 Bütçe
 
-        cursor.execute(
-            "UPDATE balance SET amount = ? WHERE id = 1", (new_balance,)
-        )
-        cursor.execute(
-            "INSERT INTO positions (pair, entry_price, amount, cost) VALUES (?, ?, ?, ?)",
-            (buy_symbol, buy_price, coin_qty, buy_amount_try),
-        )
-        cursor.execute(
-            "INSERT INTO history (pair, type, price, pnl, status) VALUES (?, ?, ?, ?, ?)",
-            (
-                buy_symbol,
-                "ALIM",
-                f"₺{buy_price:,.2f}",
-                "₺0.00",
-                "AquiverAI Pozisyon Açtı",
-            ),
-        )
+        raw_buy_amount = balance * allocated_ratio
+
+        # Min / Max Bütçe Sınırları
+        buy_amount_try = round(max(1000.0, min(raw_buy_amount, balance)), 2)
+
+        if buy_amount_try >= 1000 and balance >= buy_amount_try:
+            coin_qty = buy_amount_try / buy_price
+            new_balance = balance - buy_amount_try
+
+            cursor.execute(
+                "UPDATE balance SET amount = ? WHERE id = 1", (new_balance,)
+            )
+            cursor.execute(
+                "INSERT INTO positions (pair, entry_price, amount, cost) VALUES (?, ?, ?, ?)",
+                (buy_symbol, buy_price, coin_qty, buy_amount_try),
+            )
+            cursor.execute(
+                "INSERT INTO history (pair, type, price, pnl, status) VALUES (?, ?, ?, ?, ?)",
+                (
+                    buy_symbol,
+                    "ALIM",
+                    f"₺{buy_price:,.2f}",
+                    "₺0.00",
+                    f"AquiverAI Pozisyon Açtı (Skor: {score:.1f})",
+                ),
+            )
 
     conn.commit()
     conn.close()
