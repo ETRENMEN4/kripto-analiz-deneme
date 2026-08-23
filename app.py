@@ -209,7 +209,7 @@ def run_aquiver_bot_cycle():
                 )
                 balance = new_balance
 
-    # 2. Dinamik Sermaye Yönetimi ile Yeni Pozisyon Açma (Skor Bazlı Alım)
+    # 2. Dinamik Sermaye Yönetimi (Maksimum %25 Bütçe Sınırı)
     bullish_candidates = df_analysis[
         (df_analysis["is_bullish"] == True)
         & (~df_analysis["pair"].isin(positions.keys()))
@@ -226,17 +226,17 @@ def run_aquiver_bot_cycle():
         buy_price = float(target_buy_coin["last"])
         score = float(target_buy_coin["score"])
 
-        # Dinamik Bütçe Hesaplama (Skora Göre)
+        # Skor Bazlı Bütçe Payı (En yüksek %25 olacak şekilde)
         if score >= 15:
-            allocated_ratio = 0.70  # %70 Bütçe
+            allocated_ratio = 0.25  # En yüksek güven: Bakiyenin %25'i
         elif score >= 7:
-            allocated_ratio = 0.40  # %40 Bütçe
+            allocated_ratio = 0.15  # Orta güven: Bakiyenin %15'i
         else:
-            allocated_ratio = 0.20  # %20 Bütçe
+            allocated_ratio = 0.05  # Düşük güven: Bakiyenin %5'i
 
         raw_buy_amount = balance * allocated_ratio
 
-        # Min / Max Bütçe Sınırları
+        # Min ₺1,000, Max bakiyenin %25'i
         buy_amount_try = round(max(1000.0, min(raw_buy_amount, balance)), 2)
 
         if buy_amount_try >= 1000 and balance >= buy_amount_try:
