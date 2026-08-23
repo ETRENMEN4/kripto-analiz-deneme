@@ -161,12 +161,20 @@ def run_aquiver_bot_cycle():
     positions_df = pd.read_sql_query("SELECT * FROM positions", conn)
 
     positions = {}
+    total_unrealized_pnl = 0.0
+
     for _, row in positions_df.iterrows():
-        positions[row["pair"]] = {
+        p_coin = row["pair"]
+        positions[p_coin] = {
             "entry_price": float(row["entry_price"]),
             "amount": float(row["amount"]),
             "cost": float(row["cost"]),
         }
+        c_match = df_analysis[df_analysis["pair"] == p_coin]
+        if not c_match.empty:
+            c_price = float(c_match.iloc[0]["last"])
+            c_val = float(row["amount"]) * c_price
+            total_unrealized_pnl += c_val - float(row["cost"])
 
     # 1. Açık Pozisyonların Takibi & Kâr/Zarar Satışı
     for pos_coin, pos_data in list(positions.items()):
@@ -209,7 +217,13 @@ def run_aquiver_bot_cycle():
                 )
                 balance = new_balance
 
-    # 2. Dinamik Sermaye Yönetimi (Min ₺5,000 - Max %25 Sınırı)
+    # 2. Toplam Varlık (Net Portföy Değeri) Bazlı Alım Mantığı
+    total_portfolio_val = (
+        balance
+        + sum(p["cost"] for p in positions.values())
+        + total_unrealized_pnl
+    )
+
     bullish_candidates = df_analysis[
         (df_analysis["is_bullish"] == True)
         & (~df_analysis["pair"].isin(positions.keys()))
@@ -226,20 +240,21 @@ def run_aquiver_bot_cycle():
         buy_price = float(target_buy_coin["last"])
         score = float(target_buy_coin["score"])
 
-        # Skor Bazlı Bütçe Payı (Max %25)
+        # Toplam Varlığın (Portföyün) % Oranı
         if score >= 15:
-            allocated_ratio = 0.25
+            target_ratio = 0.25  # Toplam varlığın %25'i
         elif score >= 7:
-            allocated_ratio = 0.15
+            target_ratio = 0.15  # Toplam varlığın %15'i
         else:
-            allocated_ratio = 0.10
+            target_ratio = 0.10  # Toplam varlığın %10'u
 
-        raw_buy_amount = balance * allocated_ratio
+        # Alım tutarı Toplam Portföye göre belirlenir
+        target_buy_amount = total_portfolio_val * target_ratio
 
-        # Min ₺5,000, Max bakiyenin %25'i
-        buy_amount_try = round(max(5000.0, min(raw_buy_amount, balance)), 2)
+        # Mevcut nakit bakiyeyi ve 5.000 TL sınırını aşamaz
+        buy_amount_try = round(min(target_buy_amount, balance), 2)
 
-        if buy_amount_try >= 5000 and balance >= buy_amount_try:
+        if buy_amount_try >= 5000:
             coin_qty = buy_amount_try / buy_price
             new_balance = balance - buy_amount_try
 
