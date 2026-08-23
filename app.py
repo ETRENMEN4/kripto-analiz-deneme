@@ -263,21 +263,25 @@ balance, bot_positions, trade_history_df = get_db_data()
 
 if not df_analysis.empty:
     pairs_list = df_analysis["pair"].tolist()
+
+    # Oturum durumu ilklendirme (Session State Fix)
     if "selected_coin" not in st.session_state:
         st.session_state.selected_coin = pairs_list[0]
 
+    if st.session_state.selected_coin not in pairs_list:
+        st.session_state.selected_coin = pairs_list[0]
+
+    def on_select_change():
+        st.session_state.selected_coin = st.session_state.coin_selector_box
+
     st.sidebar.subheader("📌 Coin Seçimi (Sadece TRY)")
-    selected_from_select = st.sidebar.selectbox(
+    st.sidebar.selectbox(
         "Analiz Edilecek TRY Çifti:",
         pairs_list,
-        index=pairs_list.index(st.session_state.selected_coin)
-        if st.session_state.selected_coin in pairs_list
-        else 0,
+        index=pairs_list.index(st.session_state.selected_coin),
+        key="coin_selector_box",
+        on_change=on_select_change,
     )
-
-    if selected_from_select != st.session_state.selected_coin:
-        st.session_state.selected_coin = selected_from_select
-        st.rerun()
 
     st.sidebar.markdown("---")
     if st.sidebar.button("🔄 Kasayı ₺100,000'a Sıfırla"):
@@ -377,7 +381,6 @@ if not df_analysis.empty:
     if base_symbol in tradingview_overrides:
         tv_symbol = tradingview_overrides[base_symbol]
     else:
-        # Öncelik Binance USDT, yoksa BtcTurk TRY
         tv_symbol = f"BINANCE:{base_symbol}USDT"
 
     tradingview_html = f"""
