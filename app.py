@@ -1,8 +1,9 @@
 import sqlite3
+import threading
+import time
 import pandas as pd
 import requests
 import streamlit as st
-from apscheduler.schedulers.background import BackgroundScheduler
 
 # Streamlit Arayüz Ayarları
 st.set_page_config(
@@ -17,7 +18,6 @@ DB_FILE = "aquiver_bot.db"
 def init_db():
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
-    # Kasa Bakiyesi Tablosu
     cursor.execute(
         "CREATE TABLE IF NOT EXISTS balance (id INTEGER PRIMARY KEY, amount REAL)"
     )
@@ -25,7 +25,6 @@ def init_db():
     if cursor.fetchone()[0] == 0:
         cursor.execute("INSERT INTO balance (id, amount) VALUES (1, 10000.0)")
 
-    # Açık Pozisyonlar Tablosu
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS positions (
             pair TEXT PRIMARY KEY,
@@ -35,7 +34,6 @@ def init_db():
         )
     """)
 
-    # İşlem Geçmişi Tablosu
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS history (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -132,7 +130,7 @@ def fetch_btcturk_analysis():
         return pd.DataFrame()
 
 
-# --- 7/24 ARKA PLAN OTO-TRADING MOTORU ---
+# --- ARKA PLAN TRADING MOTORU ---
 def run_aquiver_bot_cycle():
     df_analysis = fetch_btcturk_analysis()
     if df_analysis.empty:
@@ -152,7 +150,7 @@ def run_aquiver_bot_cycle():
             "cost": row["cost"],
         }
 
-    # 1. Açık Pozisyonların Takibi ve Kapatılması
+    # Açık Pozisyonların Takibi
     for pos_coin, pos_data in list(positions.items()):
         coin_match = df_analysis[df_analysis["pair"] == pos_coin]
         if not coin_match.empty:
@@ -194,7 +192,7 @@ def run_aquiver_bot_cycle():
                 )
                 balance = new_balance
 
-    # 2. Yeni Çeşitlendirilmiş Pozisyon Açma
+    # Yeni Pozisyon Açma
     bullish_candidates = df_analysis[
         (df_analysis["is_bullish"] == True)
         & (~df_analysis["pair"].isin(positions.keys()))
@@ -232,16 +230,23 @@ def run_aquiver_bot_cycle():
     conn.close()
 
 
-# ARKA PLAN ZAMANLAYICISINI BAŞLATMA (HER 30 SANİYEDE BİR ÇALIŞIR)
+def background_loop():
+    while True:
+        try:
+            run_aquiver_bot_cycle()
+        except Exception:
+            pass
+        time.sleep(30)
+
+
 @st.cache_resource
-def start_scheduler():
-    scheduler = BackgroundScheduler()
-    scheduler.add_job(run_aquiver_bot_cycle, "interval", seconds=30)
-    scheduler.start()
-    return scheduler
+def start_background_thread():
+    t = threading.Thread(target=background_loop, daemon=True)
+    t.start()
+    return t
 
 
-start_scheduler()
+start_background_thread()
 
 # --- ARAYÜZ VE GÖSTERGELER ---
 df_analysis = fetch_btcturk_analysis()
