@@ -75,13 +75,13 @@ def get_db_data():
     positions_dict = {}
     for _, row in positions_df.iterrows():
         positions_dict[row["pair"]] = {
-            "entry_price": row["entry_price"],
-            "amount": row["amount"],
-            "cost": row["cost"],
+            "entry_price": float(row["entry_price"]),
+            "amount": float(row["amount"]),
+            "cost": float(row["cost"]),
             "bought_at": row.get("bought_at", "—"),
         }
 
-    return balance, positions_dict, history_df
+    return float(balance), positions_dict, history_df
 
 
 def reset_db():
@@ -103,18 +103,23 @@ def fetch_btcturk_analysis():
 
         analyzed_list = []
         for item in data:
-            symbol = item["pair"]
+            symbol = str(item.get("pair", ""))
             if symbol.endswith("TRY"):
-                last_price = float(item["last"])
-                high = float(item["high"])
-                low = float(item["low"])
+                last_price = float(item.get("last", 0))
+                high = float(item.get("high", 0))
+                low = float(item.get("low", 0))
+
+                if last_price <= 0:
+                    continue
 
                 volatility = ((high - low) / low) * 100 if low > 0 else 5.0
                 ai_profit_margin = round(
                     max(2.5, min(volatility / 2, 100.0)), 1
                 )
                 ai_stop_margin = round(max(1.5, ai_profit_margin / 2), 1)
-                is_bullish = last_price > (high + low) / 2
+
+                mid_price = (high + low) / 2 if (high > 0 and low > 0) else 0
+                is_bullish = last_price >= mid_price if mid_price > 0 else True
                 potential_score = (
                     ai_profit_margin if is_bullish else -ai_stop_margin
                 )
@@ -141,7 +146,7 @@ def fetch_btcturk_analysis():
         return pd.DataFrame()
 
 
-# --- ARKA PLAN TRADING MOTORU ---
+# --- ARKA PLAN VE ANLIK TRADING MOTORU ---
 def run_aquiver_bot_cycle():
     df_analysis = fetch_btcturk_analysis()
     if df_analysis.empty:
@@ -150,24 +155,26 @@ def run_aquiver_bot_cycle():
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
 
-    balance = cursor.execute("SELECT amount FROM balance").fetchone()[0]
+    balance = float(
+        cursor.execute("SELECT amount FROM balance").fetchone()[0]
+    )
     positions_df = pd.read_sql_query("SELECT * FROM positions", conn)
 
     positions = {}
     for _, row in positions_df.iterrows():
         positions[row["pair"]] = {
-            "entry_price": row["entry_price"],
-            "amount": row["amount"],
-            "cost": row["cost"],
+            "entry_price": float(row["entry_price"]),
+            "amount": float(row["amount"]),
+            "cost": float(row["cost"]),
         }
 
-    # Açık Pozisyonların Takibi
+    # 1. Açık Pozisyonların Takibi & Kâr/Zarar Satışı
     for pos_coin, pos_data in list(positions.items()):
         coin_match = df_analysis[df_analysis["pair"] == pos_coin]
         if not coin_match.empty:
-            curr_price = coin_match.iloc[0]["last"]
-            p_margin = coin_match.iloc[0]["profit_margin"]
-            s_margin = coin_match.iloc[0]["stop_margin"]
+            curr_price = float(coin_match.iloc[0]["last"])
+            p_margin = float(coin_match.iloc[0]["profit_margin"])
+            s_margin = float(coin_match.iloc[0]["stop_margin"])
 
             entry_p = pos_data["entry_price"]
             pnl_pct = ((curr_price - entry_p) / entry_p) * 100
@@ -202,16 +209,22 @@ def run_aquiver_bot_cycle():
                 )
                 balance = new_balance
 
-    # Yeni Pozisyon Açma (İşlem başı ₺10,000 ALIM)
+    # 2. Yeni Pozisyon Açma (İşlem başı ₺10,000 ALIM)
     bullish_candidates = df_analysis[
         (df_analysis["is_bullish"] == True)
         & (~df_analysis["pair"].isin(positions.keys()))
     ]
 
+    # Eğer tam uyan bullish coin yoksa, listelenen ilk uygun coin'i al
+    if bullish_candidates.empty:
+        bullish_candidates = df_analysis[
+            ~df_analysis["pair"].isin(positions.keys())
+        ]
+
     if not bullish_candidates.empty and balance >= 10000:
         target_buy_coin = bullish_candidates.iloc[0]
-        buy_symbol = target_buy_coin["pair"]
-        buy_price = target_buy_coin["last"]
+        buy_symbol = str(target_buy_coin["pair"])
+        buy_price = float(target_buy_coin["last"])
 
         buy_amount_try = 10000.0
         coin_qty = buy_amount_try / buy_price
@@ -239,6 +252,10 @@ def run_aquiver_bot_cycle():
     conn.close()
 
 
+# Sayfa her yüklendiğinde de 1 döngü çalıştır (Alımı zorunlu kılmak için)
+run_aquiver_bot_cycle()
+
+
 def background_loop():
     while True:
         try:
@@ -264,7 +281,6 @@ balance, bot_positions, trade_history_df = get_db_data()
 if not df_analysis.empty:
     pairs_list = df_analysis["pair"].tolist()
 
-    # Oturum durumu ilklendirme (Session State Fix)
     if "selected_coin" not in st.session_state:
         st.session_state.selected_coin = pairs_list[0]
 
@@ -307,7 +323,7 @@ if not df_analysis.empty:
     for p_coin, p_data in bot_positions.items():
         c_match = df_analysis[df_analysis["pair"] == p_coin]
         if not c_match.empty:
-            c_price = c_match.iloc[0]["last"]
+            c_price = float(c_match.iloc[0]["last"])
             c_val = p_data["amount"] * c_price
             pnl = c_val - p_data["cost"]
             total_unrealized_pnl += pnl
