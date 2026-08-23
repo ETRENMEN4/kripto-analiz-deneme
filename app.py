@@ -215,7 +215,6 @@ def run_aquiver_bot_cycle():
         & (~df_analysis["pair"].isin(positions.keys()))
     ]
 
-    # Eğer tam uyan bullish coin yoksa, listelenen ilk uygun coin'i al
     if bullish_candidates.empty:
         bullish_candidates = df_analysis[
             ~df_analysis["pair"].isin(positions.keys())
@@ -252,7 +251,6 @@ def run_aquiver_bot_cycle():
     conn.close()
 
 
-# Sayfa her yüklendiğinde de 1 döngü çalıştır (Alımı zorunlu kılmak için)
 run_aquiver_bot_cycle()
 
 
@@ -363,11 +361,17 @@ if not df_analysis.empty:
         p_data["cost"] for p_data in bot_positions.values()
     ) + total_unrealized_pnl
     net_total_pnl = total_portfolio_val - 100000.0
-    total_pnl_sign = "+" if net_total_pnl > 0 else ""
+
+    if net_total_pnl >= 0:
+        pnl_delta_str = f"+₺{net_total_pnl:,.2f}"
+    else:
+        pnl_delta_str = f"-₺{abs(net_total_pnl):,.2f}"
+
     b4.metric(
         "Genel Toplam Kâr/Zarar",
-        f"{total_pnl_sign}₺{net_total_pnl:,.2f}",
-        delta=f"{total_pnl_sign}₺{net_total_pnl:,.2f}",
+        f"₺{net_total_pnl:,.2f}",
+        delta=pnl_delta_str,
+        delta_color="normal",
     )
 
     # --- AKTİF AÇIK POZİSYONLAR TABLOSU ---
@@ -384,7 +388,6 @@ if not df_analysis.empty:
     st.subheader("💡 Canlı Mum Grafiği")
     base_symbol = selected_pair.replace("TRY", "").replace("USDT", "")
 
-    # TradingView Borsa Eşleştirme Haritası
     tradingview_overrides = {
         "TRUMP": "MEXC:TRUMPUSDT",
         "TRUMPTRY": "MEXC:TRUMPUSDT",
