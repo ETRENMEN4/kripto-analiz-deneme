@@ -304,14 +304,28 @@ if not df_analysis.empty:
     b2.metric("Aktif Açık Pozisyon Sayısı", len(bot_positions))
     b3.metric("Toplam İşlem Kaydı", len(trade_history_df))
 
-    if selected_pair in bot_positions:
-        pos = bot_positions[selected_pair]
-        current_val = pos["amount"] * price
-        pnl_val = current_val - pos["cost"]
-        pnl_sign = "+" if pnl_val > 0 else ""
-        st.info(
-            f"⚡ **AquiverAI Şu An {selected_pair} Pozisyonunda!** | Alış Fiyatı: {currency}{pos['entry_price']:,.2f} | Anlık Durum: **{pnl_sign}${pnl_val:,.2f}**"
-        )
+    # --- AKTİF AÇIK POZİSYONLAR TABLOSU ---
+    if bot_positions:
+        st.subheader("⚡ Aktif Açık Pozisyonlar (Anlık Durum)")
+        pos_list = []
+        for p_coin, p_data in bot_positions.items():
+            c_match = df_analysis[df_analysis["pair"] == p_coin]
+            if not c_match.empty:
+                c_price = c_match.iloc[0]["last"]
+                c_curr = c_match.iloc[0]["currency"]
+                c_val = p_data["amount"] * c_price
+                pnl = c_val - p_data["cost"]
+                pnl_sign = "+" if pnl > 0 else ""
+                pos_list.append(
+                    {
+                        "Coin": p_coin,
+                        "Alış Fiyatı": f"{c_curr}{p_data['entry_price']:,.2f}",
+                        "Güncel Fiyat": f"{c_curr}{c_price:,.2f}",
+                        "Yatırılan Tutar": f"${p_data['cost']:,.2f}",
+                        "Anlık Kâr/Zarar": f"{pnl_sign}${pnl:,.2f}",
+                    }
+                )
+        st.dataframe(pd.DataFrame(pos_list), use_container_width=True)
 
     st.markdown("---")
     col1, col2, col3 = st.columns(3)
