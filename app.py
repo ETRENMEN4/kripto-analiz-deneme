@@ -7,7 +7,7 @@ import streamlit as st
 
 # Streamlit Arayüz Ayarları
 st.set_page_config(
-    page_title="BtcTurk AI & AquiverAI 7/24 Bot (Sadece TRY)", layout="wide"
+    page_title="BtcTurk AI & AquiverAI 7/24 Bot (TRY)", layout="wide"
 )
 st.title("📈 BtcTurk Canlı Analiz & 7/24 Otomatik AquiverAI Botu (TRY)")
 
@@ -30,7 +30,8 @@ def init_db():
             pair TEXT PRIMARY KEY,
             entry_price REAL,
             amount REAL,
-            cost REAL
+            cost REAL,
+            bought_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )
     """)
 
@@ -46,6 +47,16 @@ def init_db():
         )
     """)
     conn.commit()
+
+    # Mevcut veritabanında bought_at sütunu yoksa otomatik ekle
+    try:
+        cursor.execute(
+            "ALTER TABLE positions ADD COLUMN bought_at DATETIME DEFAULT CURRENT_TIMESTAMP"
+        )
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass
+
     conn.close()
 
 
@@ -68,6 +79,7 @@ def get_db_data():
             "entry_price": row["entry_price"],
             "amount": row["amount"],
             "cost": row["cost"],
+            "bought_at": row.get("bought_at", "—"),
         }
 
     return balance, positions_dict, history_df
@@ -93,7 +105,6 @@ def fetch_btcturk_analysis():
         analyzed_list = []
         for item in data:
             symbol = item["pair"]
-            # SADECE TRY İLE BİTEN PARİTELER
             if symbol.endswith("TRY"):
                 last_price = float(item["last"])
                 high = float(item["high"])
@@ -131,7 +142,7 @@ def fetch_btcturk_analysis():
         return pd.DataFrame()
 
 
-# --- ARKA PLAN TRADING MOTORU (TRY ÖZEL) ---
+# --- ARKA PLAN TRADING MOTORU ---
 def run_aquiver_bot_cycle():
     df_analysis = fetch_btcturk_analysis()
     if df_analysis.empty:
@@ -305,6 +316,7 @@ if not df_analysis.empty:
                     "Güncel Fiyat": f"₺{c_price:,.2f}",
                     "Yatırılan Tutar": f"₺{p_data['cost']:,.2f}",
                     "Anlık Kâr/Zarar": f"{pnl_sign}₺{pnl:,.2f}",
+                    "Alım Zamanı": p_data.get("bought_at", "—"),
                 }
             )
 
@@ -362,5 +374,5 @@ if not df_analysis.empty:
     st.components.v1.html(tradingview_html, height=520)
 
     if not trade_history_df.empty:
-        st.subheader("📜 AquiverAI 7/24 İşlem Geçmişi")
+        st.subheader("📜 AquiverAI 7/24 İşlem Geçmişi (Alım & Satış Saatleri)")
         st.dataframe(trade_history_df, use_container_width=True)
