@@ -48,7 +48,6 @@ def init_db():
     """)
     conn.commit()
 
-    # Mevcut veritabanında bought_at sütunu yoksa otomatik ekle
     try:
         cursor.execute(
             "ALTER TABLE positions ADD COLUMN bought_at DATETIME DEFAULT CURRENT_TIMESTAMP"
@@ -363,8 +362,23 @@ if not df_analysis.empty:
     col3.metric("24s En Düşük", f"₺{low:,.2f}")
 
     st.subheader("💡 Canlı Mum Grafiği")
-    base_symbol = selected_pair.replace("TRY", "")
-    tv_symbol = f"BTCTURK:{base_symbol}TRY"
+    base_symbol = selected_pair.replace("TRY", "").replace("USDT", "")
+
+    # TradingView Borsa Eşleştirme Haritası
+    tradingview_overrides = {
+        "TRUMP": "MEXC:TRUMPUSDT",
+        "TRUMPTRY": "MEXC:TRUMPUSDT",
+        "ZRO": "BINANCE:ZROUSDT",
+        "EIGEN": "BINANCE:EIGENUSDT",
+        "MORPHO": "BYBIT:MORPHOUSDT",
+        "PUMP": "BYBIT:PUMPUSDT",
+    }
+
+    if base_symbol in tradingview_overrides:
+        tv_symbol = tradingview_overrides[base_symbol]
+    else:
+        # Öncelik Binance USDT, yoksa BtcTurk TRY
+        tv_symbol = f"BINANCE:{base_symbol}USDT"
 
     tradingview_html = f"""
     <div class="tradingview-widget-container">
