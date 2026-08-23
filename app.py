@@ -7,8 +7,8 @@ st.set_page_config(page_title="BtcTurk AI & AquiverAI Bot", layout="wide")
 st.title("📈 BtcTurk Canlı Analiz & AquiverAI Trading Botu")
 
 
-# BtcTurk API'den Tüm Verileri Çekme ve AI Analizi Yapma
-@st.cache_data(ttl=30)
+# BtcTurk API Veri Çekme
+@st.cache_data(ttl=15)
 def get_all_pairs_analysis():
     try:
         ticker_url = "https://api.btcturk.com/api/v2/ticker"
@@ -60,13 +60,13 @@ def get_all_pairs_analysis():
 
 df_analysis = get_all_pairs_analysis()
 
-# --- AQUIVER AI SİMÜLASYON HAFIZASI ---
+# --- AQUIVER AI HAFIZA YÖNETİMİ ---
 if "bot_balance" not in st.session_state:
-    st.session_state.bot_balance = 10000.0  # $10,000 Başlangıç Sanal Bakiyesi
+    st.session_state.bot_balance = 10000.0
 if "bot_positions" not in st.session_state:
-    st.session_state.bot_positions = {}  # Açık pozisyonlar
+    st.session_state.bot_positions = {}
 if "trade_history" not in st.session_state:
-    st.session_state.trade_history = []  # İşlem geçmişi
+    st.session_state.trade_history = []
 
 if not df_analysis.empty:
     pairs_list = df_analysis["pair"].tolist()
@@ -88,18 +88,94 @@ if not df_analysis.empty:
         st.session_state.selected_coin = selected_from_select
         st.rerun()
 
+    # Kasa Sırfırlama Seçeneği
+    st.sidebar.markdown("---")
+    if st.sidebar.button("🔄 Kasayı $10,000'a Sıfırla"):
+        st.session_state.bot_balance = 10000.0
+        st.session_state.bot_positions = {}
+        st.session_state.trade_history = []
+        st.rerun()
+
     st.sidebar.markdown("---")
     st.sidebar.subheader("🔥 AI Potansiyel Sıralaması")
     for _, row in df_analysis.iterrows():
         symbol_name = row["pair"]
         label = (
-            f"🟢 {symbol_name}: +%{row['profit_margin']}"
+            f"🟢 {symbol_name}: +{row['profit_margin']}%"
             if row["is_bullish"]
-            else f"🔴 {symbol_name}: -%{row['stop_margin']}"
+            else f"🔴 {symbol_name}: -{row['stop_margin']}%"
         )
         if st.sidebar.button(label, key=f"btn_{symbol_name}"):
             st.session_state.selected_coin = symbol_name
             st.rerun()
+
+    # 🤖 AQUIVER AI GENEL TARAMA & OTO-TRADING MOTORU
+    # 1. Mevcut Açık Pozisyonların Kâr/Zarar Kontrolü
+    for pos_coin, pos_data in list(st.session_state.bot_positions.items()):
+        coin_match = df_analysis[df_analysis["pair"] == pos_coin]
+        if not coin_match.empty:
+            curr_price = coin_match.iloc[0]["last"]
+            curr_currency = coin_match.iloc[0]["currency"]
+            p_margin = coin_match.iloc[0]["profit_margin"]
+            s_margin = coin_match.iloc[0]["stop_margin"]
+
+            entry_p = pos_data["entry_price"]
+            pnl_pct = ((curr_price - entry_p) / entry_p) * 100
+            current_val = pos_data["amount"] * curr_price
+            pnl_amount = current_val - pos_data["cost"]
+
+            # Satış Koşulu
+            if pnl_pct >= p_margin or pnl_pct <= -s_margin:
+                st.session_state.bot_balance += current_val
+                status_text = (
+                    "KÂR İLE KAPATILDI"
+                    if pnl_amount > 0
+                    else "ZARAR KES (STOP) YAPILDI"
+                )
+                pnl_sign = "+" if pnl_amount > 0 else ""
+
+                st.session_state.trade_history.append(
+                    {
+                        "Coin": pos_coin,
+                        "Tür": "SATIŞ",
+                        "Fiyat": f"{curr_currency}{curr_price:,.2f}",
+                        "Net Kâr/Zarar": f"{pnl_sign}${pnl_amount:,.2f}",
+                        "Durum": status_text,
+                    }
+                )
+                del st.session_state.bot_positions[pos_coin]
+
+    # 2. Çeşitlendirilmiş Yeni Pozisyon Açma (Farklı Coinler İçin Tarama)
+    bullish_candidates = df_analysis[
+        (df_analysis["is_bullish"] == True)
+        & (~df_analysis["pair"].isin(st.session_state.bot_positions.keys()))
+    ]
+
+    if not bullish_candidates.empty and st.session_state.bot_balance >= 1000:
+        # En uygun ilk yeni coine pozisyon açar
+        target_buy_coin = bullish_candidates.iloc[0]
+        buy_symbol = target_buy_coin["pair"]
+        buy_price = target_buy_coin["last"]
+        buy_currency = target_buy_coin["currency"]
+
+        buy_amount_usd = 1000.0
+        coin_qty = buy_amount_usd / buy_price
+        st.session_state.bot_balance -= buy_amount_usd
+
+        st.session_state.bot_positions[buy_symbol] = {
+            "entry_price": buy_price,
+            "amount": coin_qty,
+            "cost": buy_amount_usd,
+        }
+        st.session_state.trade_history.append(
+            {
+                "Coin": buy_symbol,
+                "Tür": "ALIM",
+                "Fiyat": f"{buy_currency}{buy_price:,.2f}",
+                "Net Kâr/Zarar": "$0.00",
+                "Durum": "AquiverAI Pozisyon Açtı",
+            }
+        )
 
     # --- ANA EKRAN ---
     selected_pair = st.session_state.selected_coin
@@ -109,58 +185,8 @@ if not df_analysis.empty:
     high = coin_data["high"]
     low = coin_data["low"]
     currency = coin_data["currency"]
-    ai_profit_margin = coin_data["profit_margin"]
-    ai_stop_margin = coin_data["stop_margin"]
-    is_bullish = coin_data["is_bullish"]
 
-    target_price = price * (1 + ai_profit_margin / 100)
-    stop_price = price * (1 - ai_stop_margin / 100)
-
-    # 🤖 AQUIVER AI OTO-TRADING MOTORU (HER YENİLEMEDE KONTROL EDER)
-    # 1. Açık Pozisyon Kâr/Zarar Kontrolü
-    if selected_pair in st.session_state.bot_positions:
-        pos = st.session_state.bot_positions[selected_pair]
-        entry_p = pos["entry_price"]
-        pnl_pct = ((price - entry_p) / entry_p) * 100
-
-        # Kâr Al (Take Profit) veya Erken Stop-Loss
-        if pnl_pct >= ai_profit_margin or pnl_pct <= -ai_stop_margin:
-            sold_amount = pos["amount"] * price
-            st.session_state.bot_balance += sold_amount
-            status_text = "KÂR İLE KAPATILDI" if pnl_pct > 0 else "ZARAR KES (STOP) YAPILDI"
-            st.session_state.trade_history.append(
-                {
-                    "Coin": selected_pair,
-                    "Tür": "SATIŞ",
-                    "Fiyat": f"{currency}{price:,.2f}",
-                    "Kâr/Zarar": f"%{pnl_pct:.2f}",
-                    "Durum": status_text,
-                }
-            )
-            del st.session_state.bot_positions[selected_pair]
-
-    # 2. Yeni Pozisyon Açma Kontrolü (Güçlü Yükseliş Sinyali Varsa ve Bakiye Yeterliyse)
-    elif is_bullish and st.session_state.bot_balance >= 1000:
-        buy_amount_usd = 1000.0  # Her işleme $1000 ayırır
-        coin_qty = buy_amount_usd / price
-        st.session_state.bot_balance -= buy_amount_usd
-
-        st.session_state.bot_positions[selected_pair] = {
-            "entry_price": price,
-            "amount": coin_qty,
-            "cost": buy_amount_usd,
-        }
-        st.session_state.trade_history.append(
-            {
-                "Coin": selected_pair,
-                "Tür": "ALIM",
-                "Fiyat": f"{currency}{price:,.2f}",
-                "Kâr/Zarar": "%0.00",
-                "Durum": "AquiverAI Pozisyon Açtı",
-            }
-        )
-
-    # --- AQUIVER AI CANLI PANELİ ---
+    # Portföy Göstergeleri
     st.markdown("---")
     st.subheader("🤖 AquiverAI Sanal Trading Portföyü")
     b1, b2, b3 = st.columns(3)
@@ -170,9 +196,12 @@ if not df_analysis.empty:
 
     if selected_pair in st.session_state.bot_positions:
         pos = st.session_state.bot_positions[selected_pair]
-        pnl = ((price - pos["entry_price"]) / pos["entry_price"]) * 100
+        current_val = pos["amount"] * price
+        pnl_val = current_val - pos["cost"]
+        pnl_sign = "+" if pnl_val > 0 else ""
+
         st.info(
-            f"⚡ **AquiverAI Şu An {selected_pair} Pozisyonunda!** | Alış Fiyatı: {currency}{pos['entry_price']:,.2f} | Anlık Durum: **%{pnl:.2f}**"
+            f"⚡ **AquiverAI Şu An {selected_pair} Pozisyonunda!** | Alış Fiyatı: {currency}{pos['entry_price']:,.2f} | Anlık Durum: **{pnl_sign}${pnl_val:,.2f}**"
         )
 
     st.markdown("---")
