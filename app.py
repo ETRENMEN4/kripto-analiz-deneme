@@ -288,6 +288,28 @@ if not df_analysis.empty:
             st.session_state.selected_coin = symbol_name
             st.rerun()
 
+    # --- TOPLAM KÂR/ZARAR HESAPLAMASI ---
+    total_unrealized_pnl = 0.0
+    pos_list = []
+    for p_coin, p_data in bot_positions.items():
+        c_match = df_analysis[df_analysis["pair"] == p_coin]
+        if not c_match.empty:
+            c_price = c_match.iloc[0]["last"]
+            c_curr = c_match.iloc[0]["currency"]
+            c_val = p_data["amount"] * c_price
+            pnl = c_val - p_data["cost"]
+            total_unrealized_pnl += pnl
+            pnl_sign = "+" if pnl > 0 else ""
+            pos_list.append(
+                {
+                    "Coin": p_coin,
+                    "Alış Fiyatı": f"{c_curr}{p_data['entry_price']:,.2f}",
+                    "Güncel Fiyat": f"{c_curr}{c_price:,.2f}",
+                    "Yatırılan Tutar": f"${p_data['cost']:,.2f}",
+                    "Anlık Kâr/Zarar": f"{pnl_sign}${pnl:,.2f}",
+                }
+            )
+
     selected_pair = st.session_state.selected_coin
     coin_data = df_analysis[df_analysis["pair"] == selected_pair].iloc[0]
     price, high, low, currency = (
@@ -299,32 +321,32 @@ if not df_analysis.empty:
 
     st.markdown("---")
     st.subheader("🤖 AquiverAI Sanal Trading Portföyü (7/24 Canlı)")
-    b1, b2, b3 = st.columns(3)
+    b1, b2, b3, b4 = st.columns(4)
     b1.metric("Kasadaki Sanal Bakiye", f"${balance:,.2f}")
-    b2.metric("Aktif Açık Pozisyon Sayısı", len(bot_positions))
-    b3.metric("Toplam İşlem Kaydı", len(trade_history_df))
+    b2.metric("Aktif Açık Pozisyon", len(bot_positions))
+
+    # Toplam Kâr/Zarar Göstergesi (Renk Korumalı)
+    unrealized_sign = "+" if total_unrealized_pnl > 0 else ""
+    b3.metric(
+        "Açık Pozisyonlar Kâr/Zarar",
+        f"{unrealized_sign}${total_unrealized_pnl:,.2f}",
+    )
+
+    # Toplam Portföy Değeri (Nakit Bakiye + Açık Pozisyonların Güncel Değeri)
+    total_portfolio_val = balance + sum(
+        p_data["cost"] for p_data in bot_positions.values()
+    ) + total_unrealized_pnl
+    net_total_pnl = total_portfolio_val - 10000.0
+    total_pnl_sign = "+" if net_total_pnl > 0 else ""
+    b4.metric(
+        "Genel Toplam Kâr/Zarar",
+        f"{total_pnl_sign}${net_total_pnl:,.2f}",
+        delta=f"{total_pnl_sign}${net_total_pnl:,.2f}",
+    )
 
     # --- AKTİF AÇIK POZİSYONLAR TABLOSU ---
-    if bot_positions:
-        st.subheader("⚡ Aktif Açık Pozisyonlar (Anlık Durum)")
-        pos_list = []
-        for p_coin, p_data in bot_positions.items():
-            c_match = df_analysis[df_analysis["pair"] == p_coin]
-            if not c_match.empty:
-                c_price = c_match.iloc[0]["last"]
-                c_curr = c_match.iloc[0]["currency"]
-                c_val = p_data["amount"] * c_price
-                pnl = c_val - p_data["cost"]
-                pnl_sign = "+" if pnl > 0 else ""
-                pos_list.append(
-                    {
-                        "Coin": p_coin,
-                        "Alış Fiyatı": f"{c_curr}{p_data['entry_price']:,.2f}",
-                        "Güncel Fiyat": f"{c_curr}{c_price:,.2f}",
-                        "Yatırılan Tutar": f"${p_data['cost']:,.2f}",
-                        "Anlık Kâr/Zarar": f"{pnl_sign}${pnl:,.2f}",
-                    }
-                )
+    if pos_list:
+        st.subheader("⚡ Aktif Açık Pozisyonlar (Anlık Canlı Durum)")
         st.dataframe(pd.DataFrame(pos_list), use_container_width=True)
 
     st.markdown("---")
