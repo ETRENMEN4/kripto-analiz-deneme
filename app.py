@@ -39,6 +39,15 @@ def init_db():
             "INSERT INTO settings (id, min_buy_amount, max_buy_amount) VALUES (1, 100.0, 100000.0)"
         )
 
+    # Eski DB yapısını yeni sütuna otomatik entegre et (Migration)
+    try:
+        cursor.execute(
+            "ALTER TABLE settings ADD COLUMN max_buy_amount REAL DEFAULT 100000.0"
+        )
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass
+
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS positions (
             pair TEXT PRIMARY KEY,
@@ -79,15 +88,19 @@ init_db()
 def get_db_data():
     conn = sqlite3.connect(DB_FILE)
     balance = conn.cursor().execute("SELECT amount FROM balance").fetchone()[0]
-    settings_row = (
-        conn.cursor()
-        .execute(
-            "SELECT min_buy_amount, max_buy_amount FROM settings WHERE id = 1"
+
+    try:
+        settings_row = (
+            conn.cursor()
+            .execute(
+                "SELECT min_buy_amount, max_buy_amount FROM settings WHERE id = 1"
+            )
+            .fetchone()
         )
-        .fetchone()
-    )
-    min_buy = float(settings_row[0]) if settings_row else 100.0
-    max_buy = float(settings_row[1]) if settings_row else 100000.0
+        min_buy = float(settings_row[0]) if settings_row and settings_row[0] else 100.0
+        max_buy = float(settings_row[1]) if settings_row and settings_row[1] else 100000.0
+    except sqlite3.OperationalError:
+        min_buy, max_buy = 100.0, 100000.0
 
     positions_df = pd.read_sql_query("SELECT * FROM positions", conn)
     history_df = pd.read_sql_query(
@@ -200,11 +213,14 @@ def run_aquiver_bot_cycle():
         cursor.execute("SELECT amount FROM balance").fetchone()[0]
     )
 
-    settings_row = cursor.execute(
-        "SELECT min_buy_amount, max_buy_amount FROM settings WHERE id = 1"
-    ).fetchone()
-    min_buy_setting = float(settings_row[0]) if settings_row else 100.0
-    max_buy_setting = float(settings_row[1]) if settings_row else 100000.0
+    try:
+        settings_row = cursor.execute(
+            "SELECT min_buy_amount, max_buy_amount FROM settings WHERE id = 1"
+        ).fetchone()
+        min_buy_setting = float(settings_row[0]) if settings_row and settings_row[0] else 100.0
+        max_buy_setting = float(settings_row[1]) if settings_row and settings_row[1] else 100000.0
+    except Exception:
+        min_buy_setting, max_buy_setting = 100.0, 100000.0
 
     positions_df = pd.read_sql_query("SELECT * FROM positions", conn)
 
@@ -265,13 +281,7 @@ def run_aquiver_bot_cycle():
                 )
                 balance = new_balance
 
-    # 2. Fiyat Aralığına Göre Alım Mantığı
-    total_portfolio_val = (
-        balance
-        + sum(p["cost"] for p in positions.values())
-        + total_unrealized_pnl
-    )
-
+    # 2. Dynamic Alım Mantığı
     bullish_candidates = df_analysis[
         (df_analysis["is_bullish"] == True)
         & (~df_analysis["pair"].isin(positions.keys()))
@@ -288,7 +298,7 @@ def run_aquiver_bot_cycle():
         buy_price = float(target_buy_coin["last"])
         score = float(target_buy_coin["score"])
 
-        # Skor Bazlı Alım Miktarı (Min ve Max Tutar Sınırları İçinde)
+        # Skor Bazlı Alım Miktarı (Min ve Max Aralığında)
         if score >= 15:
             target_buy_amount = max_buy_setting
         elif score >= 7:
