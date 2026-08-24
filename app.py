@@ -25,6 +25,20 @@ def init_db():
     if cursor.fetchone()[0] == 0:
         cursor.execute("INSERT INTO balance (id, amount) VALUES (1, 100000.0)")
 
+    # Ayarlar Tablosu (Min Alım Tutarı ve Max Bütçe Yüzdesi için)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS settings (
+            id INTEGER PRIMARY KEY,
+            min_buy_amount REAL,
+            max_portfolio_ratio REAL
+        )
+    """)
+    cursor.execute("SELECT COUNT(*) FROM settings")
+    if cursor.fetchone()[0] == 0:
+        cursor.execute(
+            "INSERT INTO settings (id, min_buy_amount, max_portfolio_ratio) VALUES (1, 5000.0, 0.25)"
+        )
+
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS positions (
             pair TEXT PRIMARY KEY,
@@ -65,6 +79,16 @@ init_db()
 def get_db_data():
     conn = sqlite3.connect(DB_FILE)
     balance = conn.cursor().execute("SELECT amount FROM balance").fetchone()[0]
+    settings_row = (
+        conn.cursor()
+        .execute(
+            "SELECT min_buy_amount, max_portfolio_ratio FROM settings WHERE id = 1"
+        )
+        .fetchone()
+    )
+    min_buy = float(settings_row[0]) if settings_row else 5000.0
+    max_ratio = float(settings_row[1]) if settings_row else 0.25
+
     positions_df = pd.read_sql_query("SELECT * FROM positions", conn)
     history_df = pd.read_sql_query(
         "SELECT pair as Coin, type as Tür, price as Fiyat, pnl as 'Net Kâr/Zarar', status as Durum, timestamp as Tarih FROM history ORDER BY id DESC",
@@ -81,7 +105,24 @@ def get_db_data():
             "bought_at": row.get("bought_at", "—"),
         }
 
-    return float(balance), positions_dict, history_df
+    return (
+        float(balance),
+        positions_dict,
+        history_df,
+        min_buy,
+        max_ratio,
+    )
+
+
+def update_settings(min_buy, max_ratio):
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute(
+        "UPDATE settings SET min_buy_amount = ?, max_portfolio_ratio = ? WHERE id = 1",
+        (min_buy, max_ratio),
+    )
+    conn.commit()
+    conn.close()
 
 
 def reset_db():
@@ -158,6 +199,13 @@ def run_aquiver_bot_cycle():
     balance = float(
         cursor.execute("SELECT amount FROM balance").fetchone()[0]
     )
+
+    settings_row = cursor.execute(
+        "SELECT min_buy_amount, max_portfolio_ratio FROM settings WHERE id = 1"
+    ).fetchone()
+    min_buy_setting = float(settings_row[0]) if settings_row else 5000.0
+    max_ratio_setting = float(settings_row[1]) if settings_row else 0.25
+
     positions_df = pd.read_sql_query("SELECT * FROM positions", conn)
 
     positions = {}
@@ -217,7 +265,7 @@ def run_aquiver_bot_cycle():
                 )
                 balance = new_balance
 
-    # 2. Toplam Varlık (Net Portföy Değeri) Bazlı Alım Mantığı
+    # 2. Dynamic Alım Mantığı (Slider Ayarlarına Göre)
     total_portfolio_val = (
         balance
         + sum(p["cost"] for p in positions.values())
@@ -234,27 +282,24 @@ def run_aquiver_bot_cycle():
             ~df_analysis["pair"].isin(positions.keys())
         ]
 
-    if not bullish_candidates.empty and balance >= 5000:
+    if not bullish_candidates.empty and balance >= min_buy_setting:
         target_buy_coin = bullish_candidates.iloc[0]
         buy_symbol = str(target_buy_coin["pair"])
         buy_price = float(target_buy_coin["last"])
         score = float(target_buy_coin["score"])
 
-        # Toplam Varlığın (Portföyün) % Oranı
+        # Skor Bazlı Portföy Oranı
         if score >= 15:
-            target_ratio = 0.25  # Toplam varlığın %25'i
+            target_ratio = max_ratio_setting
         elif score >= 7:
-            target_ratio = 0.15  # Toplam varlığın %15'i
+            target_ratio = max_ratio_setting * 0.6
         else:
-            target_ratio = 0.10  # Toplam varlığın %10'u
+            target_ratio = max_ratio_setting * 0.4
 
-        # Alım tutarı Toplam Portföye göre belirlenir
         target_buy_amount = total_portfolio_val * target_ratio
-
-        # Mevcut nakit bakiyeyi ve 5.000 TL sınırını aşamaz
         buy_amount_try = round(min(target_buy_amount, balance), 2)
 
-        if buy_amount_try >= 5000:
+        if buy_amount_try >= min_buy_setting:
             coin_qty = buy_amount_try / buy_price
             new_balance = balance - buy_amount_try
 
@@ -303,7 +348,9 @@ start_background_thread()
 
 # --- ARAYÜZ VE GÖSTERGELER ---
 df_analysis = fetch_btcturk_analysis()
-balance, bot_positions, trade_history_df = get_db_data()
+balance, bot_positions, trade_history_df, current_min_buy, current_max_ratio = (
+    get_db_data()
+)
 
 if not df_analysis.empty:
     pairs_list = df_analysis["pair"].tolist()
@@ -317,6 +364,37 @@ if not df_analysis.empty:
     def on_select_change():
         st.session_state.selected_coin = st.session_state.coin_selector_box
 
+    # --- SIDEBAR (AYARLAR VE SLIDERLAR) ---
+    st.sidebar.title("⚙️ Bot Bütçe Ayarları")
+
+    # Minimum Alım Slider Bar'ı
+    new_min_buy = st.sidebar.slider(
+        "💵 Minimum Alım Tutarı (₺):",
+        min_value=1000,
+        max_value=20000,
+        value=int(current_min_buy),
+        step=500,
+        help="Bot kasadaki nakit bu tutarın altına düşerse yeni alım yapmaz.",
+    )
+
+    # Maksimum Portföy Payı Slider Bar'ı
+    new_max_ratio_pct = st.sidebar.slider(
+        "📊 Coine Özel Max Portföy Payı (%):",
+        min_value=5,
+        max_value=50,
+        value=int(current_max_ratio * 100),
+        step=5,
+        help="Bot en güvendiği coine toplam varlığının en fazla yüzde kaçını yatırabilir?",
+    )
+
+    # Ayarlar değiştiyse veritabanına kaydet
+    if (
+        new_min_buy != current_min_buy
+        or (new_max_ratio_pct / 100.0) != current_max_ratio
+    ):
+        update_settings(new_min_buy, new_max_ratio_pct / 100.0)
+
+    st.sidebar.markdown("---")
     st.sidebar.subheader("📌 Coin Seçimi (Sadece TRY)")
     st.sidebar.selectbox(
         "Analiz Edilecek TRY Çifti:",
