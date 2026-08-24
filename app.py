@@ -30,13 +30,13 @@ def init_db():
         CREATE TABLE IF NOT EXISTS settings (
             id INTEGER PRIMARY KEY,
             min_buy_amount REAL,
-            max_portfolio_ratio REAL
+            max_buy_amount REAL
         )
     """)
     cursor.execute("SELECT COUNT(*) FROM settings")
     if cursor.fetchone()[0] == 0:
         cursor.execute(
-            "INSERT INTO settings (id, min_buy_amount, max_portfolio_ratio) VALUES (1, 5000.0, 1.0)"
+            "INSERT INTO settings (id, min_buy_amount, max_buy_amount) VALUES (1, 100.0, 100000.0)"
         )
 
     cursor.execute("""
@@ -82,12 +82,12 @@ def get_db_data():
     settings_row = (
         conn.cursor()
         .execute(
-            "SELECT min_buy_amount, max_portfolio_ratio FROM settings WHERE id = 1"
+            "SELECT min_buy_amount, max_buy_amount FROM settings WHERE id = 1"
         )
         .fetchone()
     )
-    min_buy = float(settings_row[0]) if settings_row else 5000.0
-    max_ratio = float(settings_row[1]) if settings_row else 1.0
+    min_buy = float(settings_row[0]) if settings_row else 100.0
+    max_buy = float(settings_row[1]) if settings_row else 100000.0
 
     positions_df = pd.read_sql_query("SELECT * FROM positions", conn)
     history_df = pd.read_sql_query(
@@ -110,16 +110,16 @@ def get_db_data():
         positions_dict,
         history_df,
         min_buy,
-        max_ratio,
+        max_buy,
     )
 
 
-def update_settings(min_buy, max_ratio):
+def update_settings(min_buy, max_buy):
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     cursor.execute(
-        "UPDATE settings SET min_buy_amount = ?, max_portfolio_ratio = ? WHERE id = 1",
-        (min_buy, max_ratio),
+        "UPDATE settings SET min_buy_amount = ?, max_buy_amount = ? WHERE id = 1",
+        (min_buy, max_buy),
     )
     conn.commit()
     conn.close()
@@ -201,10 +201,10 @@ def run_aquiver_bot_cycle():
     )
 
     settings_row = cursor.execute(
-        "SELECT min_buy_amount, max_portfolio_ratio FROM settings WHERE id = 1"
+        "SELECT min_buy_amount, max_buy_amount FROM settings WHERE id = 1"
     ).fetchone()
-    min_buy_setting = float(settings_row[0]) if settings_row else 5000.0
-    max_ratio_setting = float(settings_row[1]) if settings_row else 1.0
+    min_buy_setting = float(settings_row[0]) if settings_row else 100.0
+    max_buy_setting = float(settings_row[1]) if settings_row else 100000.0
 
     positions_df = pd.read_sql_query("SELECT * FROM positions", conn)
 
@@ -265,7 +265,7 @@ def run_aquiver_bot_cycle():
                 )
                 balance = new_balance
 
-    # 2. Dynamic Alım Mantığı
+    # 2. Fiyat Aralığına Göre Alım Mantığı
     total_portfolio_val = (
         balance
         + sum(p["cost"] for p in positions.values())
@@ -288,18 +288,19 @@ def run_aquiver_bot_cycle():
         buy_price = float(target_buy_coin["last"])
         score = float(target_buy_coin["score"])
 
-        # Skor Bazlı Portföy Oranı
+        # Skor Bazlı Alım Miktarı (Min ve Max Tutar Sınırları İçinde)
         if score >= 15:
-            target_ratio = max_ratio_setting
+            target_buy_amount = max_buy_setting
         elif score >= 7:
-            target_ratio = max_ratio_setting * 0.6
+            target_buy_amount = (min_buy_setting + max_buy_setting) / 2
         else:
-            target_ratio = max_ratio_setting * 0.4
+            target_buy_amount = min_buy_setting
 
-        target_buy_amount = total_portfolio_val * target_ratio
-        buy_amount_try = round(min(target_buy_amount, balance), 2)
+        buy_amount_try = round(
+            min(max(target_buy_amount, min_buy_setting), balance), 2
+        )
 
-        if buy_amount_try >= min_buy_setting:
+        if buy_amount_try >= min_buy_setting and buy_amount_try <= max_buy_setting:
             coin_qty = buy_amount_try / buy_price
             new_balance = balance - buy_amount_try
 
@@ -348,7 +349,7 @@ start_background_thread()
 
 # --- ARAYÜZ VE GÖSTERGELER ---
 df_analysis = fetch_btcturk_analysis()
-balance, bot_positions, trade_history_df, current_min_buy, current_max_ratio = (
+balance, bot_positions, trade_history_df, current_min_buy, current_max_buy = (
     get_db_data()
 )
 
@@ -364,35 +365,44 @@ if not df_analysis.empty:
     def on_select_change():
         st.session_state.selected_coin = st.session_state.coin_selector_box
 
-    # --- SIDEBAR (AYARLAR VE SLIDERLAR) ---
-    st.sidebar.title("⚙️ Bot Bütçe Ayarları")
+    # --- SIDEBAR (GÖRSELDEKİ ÖZEL ÇİFT TARAFLI RANGE SLIDER DÜZENİ) ---
+    st.sidebar.markdown("### **Price**")
 
-    # Minimum Alım Slider Bar'ı (100 TL ile 50.000 TL arası)
-    new_min_buy = st.sidebar.slider(
-        "💵 Minimum Alım Tutarı (₺):",
-        min_value=100,
-        max_value=50000,
-        value=int(current_min_buy),
-        step=100,
-        help="Bot kasadaki nakit bu tutarın altına düşerse yeni alım yapmaz.",
+    # Çift Ok Kaydırma Barı
+    slider_range = st.sidebar.slider(
+        "Alım Tutar Aralığı",
+        min_value=0,
+        max_value=100000,
+        value=(int(current_min_buy), int(current_max_buy)),
+        step=500,
+        label_visibility="collapsed",
     )
 
-    # Maksimum Portföy Payı Slider Bar'ı (%5 ile %100 - Sınırsız / Tümü)
-    new_max_ratio_pct = st.sidebar.slider(
-        "📊 Coine Özel Max Portföy Payı (%):",
-        min_value=5,
-        max_value=100,
-        value=int(current_max_ratio * 100),
-        step=5,
-        help="Bot tek bir coine toplam varlığının en fazla yüzde kaçını yatırabilir? %100 seçilirse sınır olmaz.",
-    )
+    new_min, new_max = slider_range
 
-    # Ayarlar değiştiyse veritabanına kaydet
-    if (
-        new_min_buy != current_min_buy
-        or (new_max_ratio_pct / 100.0) != current_max_ratio
-    ):
-        update_settings(new_min_buy, new_max_ratio_pct / 100.0)
+    # Görseldeki "From" ve "To" Kutucuk Düzeni
+    col_from, col_to = st.sidebar.columns(2)
+    with col_from:
+        st.caption("From")
+        st.text_input(
+            "FromInput",
+            value=f"₺ {new_min:,}",
+            disabled=True,
+            label_visibility="collapsed",
+        )
+    with col_to:
+        st.caption("To")
+        max_display = "₺ ∞" if new_max >= 100000 else f"₺ {new_max:,}"
+        st.text_input(
+            "ToInput",
+            value=max_display,
+            disabled=True,
+            label_visibility="collapsed",
+        )
+
+    # Değişiklikleri veritabanına kaydet
+    if new_min != current_min_buy or new_max != current_max_buy:
+        update_settings(float(new_min), float(new_max))
 
     st.sidebar.markdown("---")
     st.sidebar.subheader("📌 Coin Seçimi (Sadece TRY)")
