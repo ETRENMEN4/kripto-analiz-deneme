@@ -379,7 +379,7 @@ if not df_analysis.empty:
     def on_select_change():
         st.session_state.selected_coin = st.session_state.coin_selector_box
 
-    # --- SIDEBAR (HEM SLIDER HEM MANUEL YAZILABİLİR KUTULAR) ---
+    # --- SIDEBAR ---
     st.sidebar.markdown("### **Price**")
 
     if "min_val" not in st.session_state:
@@ -467,7 +467,7 @@ if not df_analysis.empty:
             st.session_state.selected_coin = symbol_name
             st.rerun()
 
-    # --- TOPLAM KÂR/ZARAR HESAPLAMASI & GÜNCEL PORTFÖY DEĞERİNE GÖRE SIRALAMA ---
+    # --- TOPLAM KÂR/ZARAR HESAPLAMASI VE DÜZENLENMİŞ HEDEF KÂR SÜTUNLARI ---
     total_unrealized_pnl = 0.0
     pos_list = []
     for p_coin, p_data in bot_positions.items():
@@ -481,17 +481,19 @@ if not df_analysis.empty:
             s_margin = float(c_match.iloc[0]["stop_margin"])
 
             entry_p = float(p_data["entry_price"])
+            cost_p = float(p_data["cost"])
             
-            # Hedef satış fiyatlarının hesaplanması
+            # Hedef Kâr Hesaplamaları (% ve TL Cinsinden)
             target_tp_price = entry_p * (1 + (p_margin / 100))
             target_sl_price = entry_p * (1 - (s_margin / 100))
+            target_tp_tl = cost_p * (p_margin / 100)
 
             c_val = p_data["amount"] * c_price
-            pnl = c_val - p_data["cost"]
+            pnl = c_val - cost_p
             total_unrealized_pnl += pnl
             pnl_sign = "+" if pnl > 0 else ""
             
-            current_portfolio_value = p_data["cost"] + pnl
+            current_portfolio_value = cost_p + pnl
 
             pos_list.append(
                 {
@@ -499,11 +501,11 @@ if not df_analysis.empty:
                     "Coin": p_coin,
                     "Alış Fiyatı": f"₺{entry_p:,.2f}",
                     "Güncel Fiyat": f"₺{c_price:,.2f}",
-                    "Hedef Kâr (%)": f"%{p_margin:.1f}",
+                    "Yatırılan Tutar": f"₺{cost_p:,.2f}",
+                    "Hedef Kâr (% / ₺)": f"%{p_margin:.1f} (+₺{target_tp_tl:,.2f})",
                     "Satış Fiyatı (Kâr)": f"₺{target_tp_price:,.2f}",
                     "Stop Loss (%)": f"-%{s_margin:.1f}",
                     "Stop Fiyatı (Zarar)": f"₺{target_sl_price:,.2f}",
-                    "Yatırılan Tutar": f"₺{p_data['cost']:,.2f}",
                     "Anlık Kâr/Zarar": f"{pnl_sign}₺{pnl:,.2f}",
                     "Alım Zamanı": p_data.get("bought_at", "—"),
                 }
@@ -546,7 +548,7 @@ if not df_analysis.empty:
         delta_color="normal",
     )
 
-    # --- AKTİF AÇIK POZİSYONLAR TABLOSU (HEDEF VE STOP DAHİL) ---
+    # --- AKTİF AÇIK POZİSYONLAR TABLOSU ---
     if pos_list:
         st.subheader("⚡ Aktif Açık Pozisyonlar & Hedef / Stop Seviyeleri")
         
