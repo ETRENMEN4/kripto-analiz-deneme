@@ -288,7 +288,7 @@ def run_aquiver_bot_cycle():
                 )
                 balance = new_balance
 
-    # 2. Dynamic Alım Mantığı
+    # 2. Dynamic Alım Mantığı (%20 Tavan Sınırı)
     bullish_candidates = df_analysis[
         (df_analysis["is_bullish"] == True)
         & (~df_analysis["pair"].isin(positions.keys()))
@@ -305,15 +305,13 @@ def run_aquiver_bot_cycle():
         buy_price = float(target_buy_coin["last"])
         score = float(target_buy_coin["score"])
 
-        if score >= 15:
-            target_buy_amount = max_buy_setting
-        elif score >= 7:
-            target_buy_amount = (min_buy_setting + max_buy_setting) / 2
-        else:
-            target_buy_amount = min_buy_setting
+        # Kasadaki anlık serbest bakiyenin %20'si üst sınır belirlenir
+        cap_limit = balance * 0.20
+        calculated_amount = min_buy_setting + (score * 50)
+        desired_amount = min(calculated_amount, cap_limit)
 
         buy_amount_try = round(
-            min(max(target_buy_amount, min_buy_setting), balance), 2
+            min(max(desired_amount, min_buy_setting), max_buy_setting, balance), 2
         )
 
         if buy_amount_try >= min_buy_setting and buy_amount_try <= max_buy_setting and buy_price > 0:
@@ -479,20 +477,32 @@ if not df_analysis.empty:
         c_match = df_analysis[df_analysis["pair"] == p_coin]
         if not c_match.empty:
             c_price = float(c_match.iloc[0]["last"])
+            p_margin = float(c_match.iloc[0]["profit_margin"])
+            s_margin = float(c_match.iloc[0]["stop_margin"])
+
+            entry_p = float(p_data["entry_price"])
+            
+            # Hedef satış fiyatlarının hesaplanması
+            target_tp_price = entry_p * (1 + (p_margin / 100))
+            target_sl_price = entry_p * (1 - (s_margin / 100))
+
             c_val = p_data["amount"] * c_price
             pnl = c_val - p_data["cost"]
             total_unrealized_pnl += pnl
             pnl_sign = "+" if pnl > 0 else ""
             
-            # Anlık Portföy Değeri = Yatırılan Tutar + Kâr/Zarar
             current_portfolio_value = p_data["cost"] + pnl
 
             pos_list.append(
                 {
                     "current_portfolio_value": current_portfolio_value,
                     "Coin": p_coin,
-                    "Alış Fiyatı": f"₺{p_data['entry_price']:,.2f}",
+                    "Alış Fiyatı": f"₺{entry_p:,.2f}",
                     "Güncel Fiyat": f"₺{c_price:,.2f}",
+                    "Hedef Kâr (%)": f"%{p_margin:.1f}",
+                    "Satış Fiyatı (Kâr)": f"₺{target_tp_price:,.2f}",
+                    "Stop Loss (%)": f"-%{s_margin:.1f}",
+                    "Stop Fiyatı (Zarar)": f"₺{target_sl_price:,.2f}",
                     "Yatırılan Tutar": f"₺{p_data['cost']:,.2f}",
                     "Anlık Kâr/Zarar": f"{pnl_sign}₺{pnl:,.2f}",
                     "Alım Zamanı": p_data.get("bought_at", "—"),
@@ -536,9 +546,9 @@ if not df_analysis.empty:
         delta_color="normal",
     )
 
-    # --- AKTİF AÇIK POZİSYONLAR TABLOSU (ANLIK DEĞERE GÖRE SIRALI) ---
+    # --- AKTİF AÇIK POZİSYONLAR TABLOSU (HEDEF VE STOP DAHİL) ---
     if pos_list:
-        st.subheader("⚡ Aktif Açık Pozisyonlar (Anlık Canlı Durum)")
+        st.subheader("⚡ Aktif Açık Pozisyonlar & Hedef / Stop Seviyeleri")
         
         df_pos = pd.DataFrame(pos_list)
         df_pos = df_pos.sort_values(by="current_portfolio_value", ascending=False)
