@@ -467,7 +467,7 @@ if not df_analysis.empty:
             st.session_state.selected_coin = symbol_name
             st.rerun()
 
-    # --- TOPLAM KÂR/ZARAR HESAPLAMASI VE DÜZENLENMİŞ HEDEF KÂR SÜTUNLARI ---
+    # --- TOPLAM KÂR/ZARAR HESAPLAMASI VE DÜZENLENMİŞ HEDEF KÂR/STOP SÜTUNLARI ---
     total_unrealized_pnl = 0.0
     pos_list = []
     for p_coin, p_data in bot_positions.items():
@@ -483,10 +483,13 @@ if not df_analysis.empty:
             entry_p = float(p_data["entry_price"])
             cost_p = float(p_data["cost"])
             
-            # Hedef Kâr Hesaplamaları (% ve TL Cinsinden)
+            # Hedef Kâr Hesaplamaları (% ve TL)
             target_tp_price = entry_p * (1 + (p_margin / 100))
-            target_sl_price = entry_p * (1 - (s_margin / 100))
             target_tp_tl = cost_p * (p_margin / 100)
+
+            # Stop Loss Hesaplamaları (% ve TL)
+            target_sl_price = entry_p * (1 - (s_margin / 100))
+            target_sl_tl = cost_p * (s_margin / 100)
 
             c_val = p_data["amount"] * c_price
             pnl = c_val - cost_p
@@ -504,7 +507,7 @@ if not df_analysis.empty:
                     "Yatırılan Tutar": f"₺{cost_p:,.2f}",
                     "Hedef Kâr (% / ₺)": f"%{p_margin:.1f} (+₺{target_tp_tl:,.2f})",
                     "Satış Fiyatı (Kâr)": f"₺{target_tp_price:,.2f}",
-                    "Stop Loss (%)": f"-%{s_margin:.1f}",
+                    "Stop Loss (% / ₺)": f"-%{s_margin:.1f} (-₺{target_sl_tl:,.2f})",
                     "Stop Fiyatı (Zarar)": f"₺{target_sl_price:,.2f}",
                     "Anlık Kâr/Zarar": f"{pnl_sign}₺{pnl:,.2f}",
                     "Alım Zamanı": p_data.get("bought_at", "—"),
