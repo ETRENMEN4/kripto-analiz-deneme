@@ -11,18 +11,6 @@ st.set_page_config(
     page_title="BtcTurk AI & AquiverAI 7/24 Bot (TRY)", layout="wide"
 )
 
-# 🔄 OTOMATİK YENİLEME (Dış Kütüphane Olmadan / 10 Saniyede Bir)
-components.html(
-    """
-    <script>
-        setTimeout(function(){
-            window.parent.postMessage({type: 'streamlit:render'}, '*');
-        }, 10000);
-    </script>
-    """,
-    height=0,
-)
-
 st.title("📈 BtcTurk Canlı Analiz & 7/24 Otomatik AquiverAI Botu (TRY)")
 
 # --- VERİTABANI KURULUMU VE YÖNETİMİ ---
@@ -320,7 +308,7 @@ def run_aquiver_bot_cycle():
                 )
                 balance = new_balance
 
-    # 2. Dynamic Alım Mantığı (Özelleştirilmiş Alım Tutarları)
+    # 2. Dynamic Alım Mantığı
     bullish_candidates = df_analysis[
         (df_analysis["is_bullish"] == True)
         & (~df_analysis["pair"].isin(positions.keys()))
@@ -337,7 +325,6 @@ def run_aquiver_bot_cycle():
         buy_price = float(target_buy_coin["last"])
         score = float(target_buy_coin["score"])
 
-        # Skor Bazlı Dinamik Bakiye Hesaplaması
         calculated_amount = min_buy_setting + (max(score, 1.0) * 150)
 
         buy_amount_try = round(
@@ -379,34 +366,20 @@ def run_aquiver_bot_cycle():
     conn.close()
 
 
-run_aquiver_bot_cycle()
+# --- OTOMATİK CANLI EKRAN VE MOTOR DÖNGÜSÜ ---
+@st.fragment(run_every=5)  # ⚡ EKRANI VE BOTU HER 5 SANİYEDE BİR SIFIR F5 İLE YENİLER
+def live_dashboard():
+    run_aquiver_bot_cycle()
+    
+    df_analysis = fetch_btcturk_analysis()
+    balance, bot_positions, trade_history_df, current_min_buy, current_max_buy = (
+        get_db_data()
+    )
 
+    if df_analysis.empty:
+        st.warning("BtcTurk API verisi alınamadı, bekleniyor...")
+        return
 
-def background_loop():
-    while True:
-        try:
-            run_aquiver_bot_cycle()
-        except Exception:
-            pass
-        time.sleep(10)
-
-
-@st.cache_resource
-def start_background_thread():
-    t = threading.Thread(target=background_loop, daemon=True)
-    t.start()
-    return t
-
-
-start_background_thread()
-
-# --- ARAYÜZ VE GÖSTERGELER ---
-df_analysis = fetch_btcturk_analysis()
-balance, bot_positions, trade_history_df, current_min_buy, current_max_buy = (
-    get_db_data()
-)
-
-if not df_analysis.empty:
     pairs_list = df_analysis["pair"].tolist()
 
     if "selected_coin" not in st.session_state:
@@ -414,101 +387,6 @@ if not df_analysis.empty:
 
     if st.session_state.selected_coin not in pairs_list:
         st.session_state.selected_coin = pairs_list[0]
-
-    def on_select_change():
-        st.session_state.selected_coin = st.session_state.coin_selector_box
-
-    # --- SIDEBAR ---
-    st.sidebar.markdown("### **Price**")
-
-    if "min_val" not in st.session_state:
-        st.session_state.min_val = float(current_min_buy)
-    if "max_val" not in st.session_state:
-        st.session_state.max_val = float(current_max_buy)
-
-    def sync_from_slider():
-        st.session_state.min_val = float(
-            st.session_state.price_range_slider[0]
-        )
-        st.session_state.max_val = float(
-            st.session_state.price_range_slider[1]
-        )
-        update_settings(st.session_state.min_val, st.session_state.max_val)
-
-    def sync_from_inputs():
-        if st.session_state.input_min > st.session_state.input_max:
-            st.session_state.input_min = st.session_state.input_max
-        st.session_state.min_val = float(st.session_state.input_min)
-        st.session_state.max_val = float(st.session_state.input_max)
-        update_settings(st.session_state.min_val, st.session_state.max_val)
-
-    st.sidebar.slider(
-        "Alım Tutar Aralığı",
-        min_value=0.0,
-        max_value=100000.0,
-        value=(st.session_state.min_val, st.session_state.max_val),
-        step=500.0,
-        key="price_range_slider",
-        on_change=sync_from_slider,
-        label_visibility="collapsed",
-    )
-
-    col_from, col_to = st.sidebar.columns(2)
-    with col_from:
-        st.caption("From (₺)")
-        st.number_input(
-            "FromInput",
-            min_value=0.0,
-            max_value=100000.0,
-            value=st.session_state.min_val,
-            step=100.0,
-            key="input_min",
-            on_change=sync_from_inputs,
-            label_visibility="collapsed",
-        )
-
-    with col_to:
-        st.caption("To (₺)")
-        st.number_input(
-            "ToInput",
-            min_value=0.0,
-            max_value=100000.0,
-            value=st.session_state.max_val,
-            step=500.0,
-            key="input_max",
-            on_change=sync_from_inputs,
-            label_visibility="collapsed",
-        )
-
-    st.sidebar.markdown("---")
-    st.sidebar.subheader("📌 Coin Seçimi (Sadece TRY)")
-    st.sidebar.selectbox(
-        "Analiz Edilecek TRY Çifti:",
-        pairs_list,
-        index=pairs_list.index(st.session_state.selected_coin),
-        key="coin_selector_box",
-        on_change=on_select_change,
-    )
-
-    st.sidebar.markdown("---")
-    if st.sidebar.button("🔄 Kasayı ₺100,000'a Sıfırla"):
-        reset_db()
-        st.session_state.min_val = 100.0
-        st.session_state.max_val = 100000.0
-        st.rerun()
-
-    st.sidebar.markdown("---")
-    st.sidebar.subheader("🔥 AI TRY Potansiyel Sıralaması")
-    for _, row in df_analysis.iterrows():
-        symbol_name = row["pair"]
-        label = (
-            f"🟢 {symbol_name}: +{row['profit_margin']}%"
-            if row["is_bullish"]
-            else f"🔴 {symbol_name}: -{row['stop_margin']}%"
-        )
-        if st.sidebar.button(label, key=f"btn_{symbol_name}"):
-            st.session_state.selected_coin = symbol_name
-            st.rerun()
 
     # --- TOPLAM KÂR/ZARAR HESAPLAMASI VE POZİSYONLAR ---
     total_unrealized_pnl = 0.0
@@ -526,11 +404,9 @@ if not df_analysis.empty:
             entry_p = float(p_data["entry_price"])
             cost_p = float(p_data["cost"])
 
-            # Hedef Kâr Hesaplamaları
             target_tp_price = entry_p * (1 + (p_margin / 100))
             target_tp_tl = cost_p * (p_margin / 100)
 
-            # Stop Loss Hesaplamaları
             target_sl_price = entry_p * (1 - (s_margin / 100))
             target_sl_tl = cost_p * (s_margin / 100)
 
@@ -566,7 +442,7 @@ if not df_analysis.empty:
     )
 
     st.markdown("---")
-    st.subheader("🤖 AquiverAI Sanal TRY Portföyü (7/24 Canlı)")
+    st.subheader("🤖 AquiverAI Sanal TRY Portföyü (7/24 Canlı - Otomatik Akış)")
     b1, b2, b3, b4 = st.columns(4)
     b1.metric("Kasadaki Sanal Bakiye", f"₺{balance:,.2f}")
     b2.metric("Aktif Açık Pozisyon", len(pos_list))
@@ -618,32 +494,32 @@ if not df_analysis.empty:
     col2.metric("24s En Yüksek", f"₺{high:,.2f}")
     col3.metric("24s En Düşük", f"₺{low:,.2f}")
 
-    st.subheader("💡 Canlı Mum Grafiği")
-    base_symbol = selected_pair.replace("TRY", "").replace("USDT", "")
-
-    tradingview_overrides = {
-        "TRUMP": "MEXC:TRUMPUSDT",
-        "TRUMPTRY": "MEXC:TRUMPUSDT",
-        "ZRO": "BINANCE:ZROUSDT",
-        "EIGEN": "BINANCE:EIGENUSDT",
-        "MORPHO": "BYBIT:MORPHOUSDT",
-        "PUMP": "BYBIT:PUMPUSDT",
-    }
-
-    if base_symbol in tradingview_overrides:
-        tv_symbol = tradingview_overrides[base_symbol]
-    else:
-        tv_symbol = f"BINANCE:{base_symbol}USDT"
-
-    tradingview_html = f"""
-    <div class="tradingview-widget-container">
-      <iframe src="https://s.tradingview.com/widgetembed/?frameElementId=tradingview_1&symbol={tv_symbol}&interval=D&hidesidetoolbar=0&symboledit=1&saveimage=1&toolbarbg=f1f3f6&studies=[]&theme=dark&style=1&timezone=Etc%2FUTC" width="100%" height="500" frameborder="0" allowfullscreen></iframe>
-    </div>
-    """
-    st.components.v1.html(tradingview_html, height=520)
-
     if not trade_history_df.empty:
         st.subheader(
             "📜 AquiverAI 7/24 İşlem Geçmişi (Alım & Satış Saatleri)"
         )
         st.dataframe(trade_history_df, use_container_width=True)
+
+
+# Sidebar ve Dashboard Çağır
+df_initial = fetch_btcturk_analysis()
+if not df_initial.empty:
+    pairs_list = df_initial["pair"].tolist()
+
+    if "selected_coin" not in st.session_state:
+        st.session_state.selected_coin = pairs_list[0]
+
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("📌 Coin Seçimi (Sadece TRY)")
+    st.sidebar.selectbox(
+        "Analiz Edilecek TRY Çifti:",
+        pairs_list,
+        key="coin_selector_box",
+    )
+
+    if st.sidebar.button("🔄 Kasayı ₺100,000'a Sıfırla"):
+        reset_db()
+        st.rerun()
+
+# Canlı Paneli Çalıştır
+live_dashboard()
