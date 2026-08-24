@@ -97,8 +97,8 @@ def get_db_data():
             )
             .fetchone()
         )
-        min_buy = float(settings_row[0]) if settings_row and settings_row[0] else 100.0
-        max_buy = float(settings_row[1]) if settings_row and settings_row[1] else 100000.0
+        min_buy = float(settings_row[0]) if settings_row and settings_row[0] is not None else 100.0
+        max_buy = float(settings_row[1]) if settings_row and settings_row[1] is not None else 100000.0
     except sqlite3.OperationalError:
         min_buy, max_buy = 100.0, 100000.0
 
@@ -217,8 +217,8 @@ def run_aquiver_bot_cycle():
         settings_row = cursor.execute(
             "SELECT min_buy_amount, max_buy_amount FROM settings WHERE id = 1"
         ).fetchone()
-        min_buy_setting = float(settings_row[0]) if settings_row and settings_row[0] else 100.0
-        max_buy_setting = float(settings_row[1]) if settings_row and settings_row[1] else 100000.0
+        min_buy_setting = float(settings_row[0]) if settings_row and settings_row[0] is not None else 100.0
+        max_buy_setting = float(settings_row[1]) if settings_row and settings_row[1] is not None else 100000.0
     except Exception:
         min_buy_setting, max_buy_setting = 100.0, 100000.0
 
@@ -298,7 +298,7 @@ def run_aquiver_bot_cycle():
         buy_price = float(target_buy_coin["last"])
         score = float(target_buy_coin["score"])
 
-        # Skor Bazlı Alım Miktarı (Min ve Max Aralığında)
+        # Skor Bazlı Alım Miktarı
         if score >= 15:
             target_buy_amount = max_buy_setting
         elif score >= 7:
@@ -375,44 +375,68 @@ if not df_analysis.empty:
     def on_select_change():
         st.session_state.selected_coin = st.session_state.coin_selector_box
 
-    # --- SIDEBAR (GÖRSELDEKİ ÖZEL ÇİFT TARAFLI RANGE SLIDER DÜZENİ) ---
+    # --- SIDEBAR (HEM SLIDER HEM MANUEL YAZILABİLİR KUTULAR) ---
     st.sidebar.markdown("### **Price**")
 
+    # Session State Senkronizasyonu
+    if "min_val" not in st.session_state:
+        st.session_state.min_val = float(current_min_buy)
+    if "max_val" not in st.session_state:
+        st.session_state.max_val = float(current_max_buy)
+
+    # Slider Değişim Fonksiyonu
+    def sync_from_slider():
+        st.session_state.min_val = float(st.session_state.price_range_slider[0])
+        st.session_state.max_val = float(st.session_state.price_range_slider[1])
+        update_settings(st.session_state.min_val, st.session_state.max_val)
+
+    # Manuel Kutu Değişim Fonksiyonu
+    def sync_from_inputs():
+        if st.session_state.input_min > st.session_state.input_max:
+            st.session_state.input_min = st.session_state.input_max
+        st.session_state.min_val = float(st.session_state.input_min)
+        st.session_state.max_val = float(st.session_state.input_max)
+        update_settings(st.session_state.min_val, st.session_state.max_val)
+
     # Çift Ok Kaydırma Barı
-    slider_range = st.sidebar.slider(
+    st.sidebar.slider(
         "Alım Tutar Aralığı",
-        min_value=0,
-        max_value=100000,
-        value=(int(current_min_buy), int(current_max_buy)),
-        step=500,
+        min_value=0.0,
+        max_value=100000.0,
+        value=(st.session_state.min_val, st.session_state.max_val),
+        step=500.0,
+        key="price_range_slider",
+        on_change=sync_from_slider,
         label_visibility="collapsed",
     )
 
-    new_min, new_max = slider_range
-
-    # Görseldeki "From" ve "To" Kutucuk Düzeni
+    # Manuel Düzenlenebilir "From" ve "To" Kutuları
     col_from, col_to = st.sidebar.columns(2)
     with col_from:
-        st.caption("From")
-        st.text_input(
+        st.caption("From (₺)")
+        st.number_input(
             "FromInput",
-            value=f"₺ {new_min:,}",
-            disabled=True,
-            label_visibility="collapsed",
-        )
-    with col_to:
-        st.caption("To")
-        max_display = "₺ ∞" if new_max >= 100000 else f"₺ {new_max:,}"
-        st.text_input(
-            "ToInput",
-            value=max_display,
-            disabled=True,
+            min_value=0.0,
+            max_value=100000.0,
+            value=st.session_state.min_val,
+            step=100.0,
+            key="input_min",
+            on_change=sync_from_inputs,
             label_visibility="collapsed",
         )
 
-    # Değişiklikleri veritabanına kaydet
-    if new_min != current_min_buy or new_max != current_max_buy:
-        update_settings(float(new_min), float(new_max))
+    with col_to:
+        st.caption("To (₺)")
+        st.number_input(
+            "ToInput",
+            min_value=0.0,
+            max_value=100000.0,
+            value=st.session_state.max_val,
+            step=500.0,
+            key="input_max",
+            on_change=sync_from_inputs,
+            label_visibility="collapsed",
+        )
 
     st.sidebar.markdown("---")
     st.sidebar.subheader("📌 Coin Seçimi (Sadece TRY)")
@@ -427,6 +451,8 @@ if not df_analysis.empty:
     st.sidebar.markdown("---")
     if st.sidebar.button("🔄 Kasayı ₺100,000'a Sıfırla"):
         reset_db()
+        st.session_state.min_val = 100.0
+        st.session_state.max_val = 100000.0
         st.rerun()
 
     st.sidebar.markdown("---")
