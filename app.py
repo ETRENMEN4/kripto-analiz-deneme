@@ -69,6 +69,9 @@ def init_db():
             timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
         )
     """)
+    
+    # 0 veya negatif olan hatalı pozisyonları sil
+    cursor.execute("DELETE FROM positions WHERE cost <= 0 OR amount <= 0")
     conn.commit()
 
     try:
@@ -102,7 +105,7 @@ def get_db_data():
     except sqlite3.OperationalError:
         min_buy, max_buy = 100.0, 100000.0
 
-    positions_df = pd.read_sql_query("SELECT * FROM positions", conn)
+    positions_df = pd.read_sql_query("SELECT * FROM positions WHERE cost > 0 AND amount > 0", conn)
     history_df = pd.read_sql_query(
         "SELECT pair as Coin, type as Tür, price as Fiyat, pnl as 'Net Kâr/Zarar', status as Durum, timestamp as Tarih FROM history ORDER BY id DESC",
         conn,
@@ -209,6 +212,10 @@ def run_aquiver_bot_cycle():
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
 
+    # Hatalı kayıtları temizle
+    cursor.execute("DELETE FROM positions WHERE cost <= 0 OR amount <= 0")
+    conn.commit()
+
     balance = float(
         cursor.execute("SELECT amount FROM balance").fetchone()[0]
     )
@@ -222,7 +229,7 @@ def run_aquiver_bot_cycle():
     except Exception:
         min_buy_setting, max_buy_setting = 100.0, 100000.0
 
-    positions_df = pd.read_sql_query("SELECT * FROM positions", conn)
+    positions_df = pd.read_sql_query("SELECT * FROM positions WHERE cost > 0 AND amount > 0", conn)
 
     positions = {}
     total_unrealized_pnl = 0.0
@@ -466,6 +473,9 @@ if not df_analysis.empty:
     total_unrealized_pnl = 0.0
     pos_list = []
     for p_coin, p_data in bot_positions.items():
+        if p_data["cost"] <= 0 or p_data["amount"] <= 0:
+            continue
+            
         c_match = df_analysis[df_analysis["pair"] == p_coin]
         if not c_match.empty:
             c_price = float(c_match.iloc[0]["last"])
@@ -501,7 +511,7 @@ if not df_analysis.empty:
     st.subheader("🤖 AquiverAI Sanal TRY Portföyü (7/24 Canlı)")
     b1, b2, b3, b4 = st.columns(4)
     b1.metric("Kasadaki Sanal Bakiye", f"₺{balance:,.2f}")
-    b2.metric("Aktif Açık Pozisyon", len(bot_positions))
+    b2.metric("Aktif Açık Pozisyon", len(pos_list))
 
     unrealized_sign = "+" if total_unrealized_pnl > 0 else ""
     b3.metric(
@@ -510,7 +520,7 @@ if not df_analysis.empty:
     )
 
     total_portfolio_val = balance + sum(
-        p_data["cost"] for p_data in bot_positions.values()
+        p_data["cost"] for p_data in bot_positions.values() if p_data["cost"] > 0
     ) + total_unrealized_pnl
     net_total_pnl = total_portfolio_val - 100000.0
 
@@ -530,10 +540,9 @@ if not df_analysis.empty:
     if pos_list:
         st.subheader("⚡ Aktif Açık Pozisyonlar (Anlık Canlı Durum)")
         
-        # Güncel toplam değere (Yatırılan Tutar + Kâr/Zarar) göre büyükten küçüğe sırala
         df_pos = pd.DataFrame(pos_list)
         df_pos = df_pos.sort_values(by="current_portfolio_value", ascending=False)
-        df_pos = df_pos.drop(columns=["current_portfolio_value"]) # Sıralama değişkenini tablodan gizle
+        df_pos = df_pos.drop(columns=["current_portfolio_value"])
         
         st.dataframe(df_pos, use_container_width=True)
 
