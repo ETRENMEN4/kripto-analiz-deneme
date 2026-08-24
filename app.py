@@ -25,7 +25,7 @@ def init_db():
     if cursor.fetchone()[0] == 0:
         cursor.execute("INSERT INTO balance (id, amount) VALUES (1, 100000.0)")
 
-    # Ayarlar Tablosu (Min Alım Tutarı ve Max Bütçe Yüzdesi için)
+    # Ayarlar Tablosu
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS settings (
             id INTEGER PRIMARY KEY,
@@ -36,7 +36,7 @@ def init_db():
     cursor.execute("SELECT COUNT(*) FROM settings")
     if cursor.fetchone()[0] == 0:
         cursor.execute(
-            "INSERT INTO settings (id, min_buy_amount, max_portfolio_ratio) VALUES (1, 5000.0, 0.25)"
+            "INSERT INTO settings (id, min_buy_amount, max_portfolio_ratio) VALUES (1, 5000.0, 1.0)"
         )
 
     cursor.execute("""
@@ -87,7 +87,7 @@ def get_db_data():
         .fetchone()
     )
     min_buy = float(settings_row[0]) if settings_row else 5000.0
-    max_ratio = float(settings_row[1]) if settings_row else 0.25
+    max_ratio = float(settings_row[1]) if settings_row else 1.0
 
     positions_df = pd.read_sql_query("SELECT * FROM positions", conn)
     history_df = pd.read_sql_query(
@@ -204,7 +204,7 @@ def run_aquiver_bot_cycle():
         "SELECT min_buy_amount, max_portfolio_ratio FROM settings WHERE id = 1"
     ).fetchone()
     min_buy_setting = float(settings_row[0]) if settings_row else 5000.0
-    max_ratio_setting = float(settings_row[1]) if settings_row else 0.25
+    max_ratio_setting = float(settings_row[1]) if settings_row else 1.0
 
     positions_df = pd.read_sql_query("SELECT * FROM positions", conn)
 
@@ -265,7 +265,7 @@ def run_aquiver_bot_cycle():
                 )
                 balance = new_balance
 
-    # 2. Dynamic Alım Mantığı (Slider Ayarlarına Göre)
+    # 2. Dynamic Alım Mantığı
     total_portfolio_val = (
         balance
         + sum(p["cost"] for p in positions.values())
@@ -367,24 +367,24 @@ if not df_analysis.empty:
     # --- SIDEBAR (AYARLAR VE SLIDERLAR) ---
     st.sidebar.title("⚙️ Bot Bütçe Ayarları")
 
-    # Minimum Alım Slider Bar'ı
+    # Minimum Alım Slider Bar'ı (100 TL ile 50.000 TL arası)
     new_min_buy = st.sidebar.slider(
         "💵 Minimum Alım Tutarı (₺):",
-        min_value=1000,
-        max_value=20000,
+        min_value=100,
+        max_value=50000,
         value=int(current_min_buy),
-        step=500,
+        step=100,
         help="Bot kasadaki nakit bu tutarın altına düşerse yeni alım yapmaz.",
     )
 
-    # Maksimum Portföy Payı Slider Bar'ı
+    # Maksimum Portföy Payı Slider Bar'ı (%5 ile %100 - Sınırsız / Tümü)
     new_max_ratio_pct = st.sidebar.slider(
         "📊 Coine Özel Max Portföy Payı (%):",
         min_value=5,
-        max_value=50,
+        max_value=100,
         value=int(current_max_ratio * 100),
         step=5,
-        help="Bot en güvendiği coine toplam varlığının en fazla yüzde kaçını yatırabilir?",
+        help="Bot tek bir coine toplam varlığının en fazla yüzde kaçını yatırabilir? %100 seçilirse sınır olmaz.",
     )
 
     # Ayarlar değiştiyse veritabanına kaydet
