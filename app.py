@@ -39,7 +39,7 @@ def init_db():
             "INSERT INTO settings (id, min_buy_amount, max_buy_amount) VALUES (1, 100.0, 100000.0)"
         )
 
-    # Eski DB yapısını yeni sütuna otomatik entegre et (Migration)
+    # Migration
     try:
         cursor.execute(
             "ALTER TABLE settings ADD COLUMN max_buy_amount REAL DEFAULT 100000.0"
@@ -298,7 +298,6 @@ def run_aquiver_bot_cycle():
         buy_price = float(target_buy_coin["last"])
         score = float(target_buy_coin["score"])
 
-        # Skor Bazlı Alım Miktarı
         if score >= 15:
             target_buy_amount = max_buy_setting
         elif score >= 7:
@@ -310,7 +309,7 @@ def run_aquiver_bot_cycle():
             min(max(target_buy_amount, min_buy_setting), balance), 2
         )
 
-        if buy_amount_try >= min_buy_setting and buy_amount_try <= max_buy_setting:
+        if buy_amount_try >= min_buy_setting and buy_amount_try <= max_buy_setting and buy_price > 0:
             coin_qty = buy_amount_try / buy_price
             new_balance = balance - buy_amount_try
 
@@ -378,19 +377,16 @@ if not df_analysis.empty:
     # --- SIDEBAR (HEM SLIDER HEM MANUEL YAZILABİLİR KUTULAR) ---
     st.sidebar.markdown("### **Price**")
 
-    # Session State Senkronizasyonu
     if "min_val" not in st.session_state:
         st.session_state.min_val = float(current_min_buy)
     if "max_val" not in st.session_state:
         st.session_state.max_val = float(current_max_buy)
 
-    # Slider Değişim Fonksiyonu
     def sync_from_slider():
         st.session_state.min_val = float(st.session_state.price_range_slider[0])
         st.session_state.max_val = float(st.session_state.price_range_slider[1])
         update_settings(st.session_state.min_val, st.session_state.max_val)
 
-    # Manuel Kutu Değişim Fonksiyonu
     def sync_from_inputs():
         if st.session_state.input_min > st.session_state.input_max:
             st.session_state.input_min = st.session_state.input_max
@@ -398,7 +394,6 @@ if not df_analysis.empty:
         st.session_state.max_val = float(st.session_state.input_max)
         update_settings(st.session_state.min_val, st.session_state.max_val)
 
-    # Çift Ok Kaydırma Barı
     st.sidebar.slider(
         "Alım Tutar Aralığı",
         min_value=0.0,
@@ -410,7 +405,6 @@ if not df_analysis.empty:
         label_visibility="collapsed",
     )
 
-    # Manuel Düzenlenebilir "From" ve "To" Kutuları
     col_from, col_to = st.sidebar.columns(2)
     with col_from:
         st.caption("From (₺)")
@@ -468,7 +462,7 @@ if not df_analysis.empty:
             st.session_state.selected_coin = symbol_name
             st.rerun()
 
-    # --- TOPLAM KÂR/ZARAR HESAPLAMASI (TRY) ---
+    # --- TOPLAM KÂR/ZARAR HESAPLAMASI & GÜNCEL PORTFÖY DEĞERİNE GÖRE SIRALAMA ---
     total_unrealized_pnl = 0.0
     pos_list = []
     for p_coin, p_data in bot_positions.items():
@@ -479,8 +473,13 @@ if not df_analysis.empty:
             pnl = c_val - p_data["cost"]
             total_unrealized_pnl += pnl
             pnl_sign = "+" if pnl > 0 else ""
+            
+            # Anlık Portföy Değeri = Yatırılan Tutar + Kâr/Zarar
+            current_portfolio_value = p_data["cost"] + pnl
+
             pos_list.append(
                 {
+                    "current_portfolio_value": current_portfolio_value,
                     "Coin": p_coin,
                     "Alış Fiyatı": f"₺{p_data['entry_price']:,.2f}",
                     "Güncel Fiyat": f"₺{c_price:,.2f}",
@@ -527,10 +526,16 @@ if not df_analysis.empty:
         delta_color="normal",
     )
 
-    # --- AKTİF AÇIK POZİSYONLAR TABLOSU ---
+    # --- AKTİF AÇIK POZİSYONLAR TABLOSU (ANLIK DEĞERE GÖRE SIRALI) ---
     if pos_list:
         st.subheader("⚡ Aktif Açık Pozisyonlar (Anlık Canlı Durum)")
-        st.dataframe(pd.DataFrame(pos_list), use_container_width=True)
+        
+        # Güncel toplam değere (Yatırılan Tutar + Kâr/Zarar) göre büyükten küçüğe sırala
+        df_pos = pd.DataFrame(pos_list)
+        df_pos = df_pos.sort_values(by="current_portfolio_value", ascending=False)
+        df_pos = df_pos.drop(columns=["current_portfolio_value"]) # Sıralama değişkenini tablodan gizle
+        
+        st.dataframe(df_pos, use_container_width=True)
 
     st.markdown("---")
     col1, col2, col3 = st.columns(3)
