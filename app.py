@@ -4,15 +4,24 @@ import time
 import pandas as pd
 import requests
 import streamlit as st
-from streamlit_autorefresh import st_autorefresh
+import streamlit.components.v1 as components
 
 # Streamlit Arayüz Ayarları
 st.set_page_config(
     page_title="BtcTurk AI & AquiverAI 7/24 Bot (TRY)", layout="wide"
 )
 
-# 🔄 OTOMATİK YENİLEME: Sayfayı F5 atmaya gerek kalmadan 10 saniyede bir yeniler
-st_autorefresh(interval=10 * 1000, key="bot_refresh")
+# 🔄 OTOMATİK YENİLEME (Dış Kütüphane Olmadan / 10 Saniyede Bir)
+components.html(
+    """
+    <script>
+        setTimeout(function(){
+            window.parent.postMessage({type: 'streamlit:render'}, '*');
+        }, 10000);
+    </script>
+    """,
+    height=0,
+)
 
 st.title("📈 BtcTurk Canlı Analiz & 7/24 Otomatik AquiverAI Botu (TRY)")
 
@@ -74,7 +83,7 @@ def init_db():
             timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
         )
     """)
-    
+
     # 0 veya negatif olan hatalı pozisyonları sil
     cursor.execute("DELETE FROM positions WHERE cost <= 0 OR amount <= 0")
     conn.commit()
@@ -105,12 +114,22 @@ def get_db_data():
             )
             .fetchone()
         )
-        min_buy = float(settings_row[0]) if settings_row and settings_row[0] is not None else 100.0
-        max_buy = float(settings_row[1]) if settings_row and settings_row[1] is not None else 100000.0
+        min_buy = (
+            float(settings_row[0])
+            if settings_row and settings_row[0] is not None
+            else 100.0
+        )
+        max_buy = (
+            float(settings_row[1])
+            if settings_row and settings_row[1] is not None
+            else 100000.0
+        )
     except sqlite3.OperationalError:
         min_buy, max_buy = 100.0, 100000.0
 
-    positions_df = pd.read_sql_query("SELECT * FROM positions WHERE cost > 0 AND amount > 0", conn)
+    positions_df = pd.read_sql_query(
+        "SELECT * FROM positions WHERE cost > 0 AND amount > 0", conn
+    )
     history_df = pd.read_sql_query(
         "SELECT pair as Coin, type as Tür, price as Fiyat, pnl as 'Net Kâr/Zarar', status as Durum, timestamp as Tarih FROM history ORDER BY id DESC",
         conn,
@@ -221,20 +240,28 @@ def run_aquiver_bot_cycle():
     cursor.execute("DELETE FROM positions WHERE cost <= 0 OR amount <= 0")
     conn.commit()
 
-    balance = float(
-        cursor.execute("SELECT amount FROM balance").fetchone()[0]
-    )
+    balance = float(cursor.execute("SELECT amount FROM balance").fetchone()[0])
 
     try:
         settings_row = cursor.execute(
             "SELECT min_buy_amount, max_buy_amount FROM settings WHERE id = 1"
         ).fetchone()
-        min_buy_setting = float(settings_row[0]) if settings_row and settings_row[0] is not None else 100.0
-        max_buy_setting = float(settings_row[1]) if settings_row and settings_row[1] is not None else 100000.0
+        min_buy_setting = (
+            float(settings_row[0])
+            if settings_row and settings_row[0] is not None
+            else 100.0
+        )
+        max_buy_setting = (
+            float(settings_row[1])
+            if settings_row and settings_row[1] is not None
+            else 100000.0
+        )
     except Exception:
         min_buy_setting, max_buy_setting = 100.0, 100000.0
 
-    positions_df = pd.read_sql_query("SELECT * FROM positions WHERE cost > 0 AND amount > 0", conn)
+    positions_df = pd.read_sql_query(
+        "SELECT * FROM positions WHERE cost > 0 AND amount > 0", conn
+    )
 
     positions = {}
     total_unrealized_pnl = 0.0
@@ -293,7 +320,7 @@ def run_aquiver_bot_cycle():
                 )
                 balance = new_balance
 
-    # 2. Dynamic Alım Mantığı (Yüksek tutarlı alımlar için %20 tavanı düzenlendi)
+    # 2. Dynamic Alım Mantığı (Özelleştirilmiş Alım Tutarları)
     bullish_candidates = df_analysis[
         (df_analysis["is_bullish"] == True)
         & (~df_analysis["pair"].isin(positions.keys()))
@@ -310,15 +337,23 @@ def run_aquiver_bot_cycle():
         buy_price = float(target_buy_coin["last"])
         score = float(target_buy_coin["score"])
 
-        # Skor bazlı dinamik bakiye (kullanıcının belirlediği min-max sınırları dikkate alınır)
+        # Skor Bazlı Dinamik Bakiye Hesaplaması
         calculated_amount = min_buy_setting + (max(score, 1.0) * 150)
-        
-        # Eğer bakiye elveriyorsa min_buy ile max_buy arasında ideal alımı yapar
+
         buy_amount_try = round(
-            min(max(calculated_amount, min_buy_setting), max_buy_setting, balance), 2
+            min(
+                max(calculated_amount, min_buy_setting),
+                max_buy_setting,
+                balance,
+            ),
+            2,
         )
 
-        if buy_amount_try >= min_buy_setting and buy_amount_try <= max_buy_setting and buy_price > 0:
+        if (
+            buy_amount_try >= min_buy_setting
+            and buy_amount_try <= max_buy_setting
+            and buy_price > 0
+        ):
             coin_qty = buy_amount_try / buy_price
             new_balance = balance - buy_amount_try
 
@@ -392,8 +427,12 @@ if not df_analysis.empty:
         st.session_state.max_val = float(current_max_buy)
 
     def sync_from_slider():
-        st.session_state.min_val = float(st.session_state.price_range_slider[0])
-        st.session_state.max_val = float(st.session_state.price_range_slider[1])
+        st.session_state.min_val = float(
+            st.session_state.price_range_slider[0]
+        )
+        st.session_state.max_val = float(
+            st.session_state.price_range_slider[1]
+        )
         update_settings(st.session_state.min_val, st.session_state.max_val)
 
     def sync_from_inputs():
@@ -471,13 +510,13 @@ if not df_analysis.empty:
             st.session_state.selected_coin = symbol_name
             st.rerun()
 
-    # --- TOPLAM KÂR/ZARAR HESAPLAMASI VE DÜZENLENMİŞ HEDEF KÂR/STOP SÜTUNLARI ---
+    # --- TOPLAM KÂR/ZARAR HESAPLAMASI VE POZİSYONLAR ---
     total_unrealized_pnl = 0.0
     pos_list = []
     for p_coin, p_data in bot_positions.items():
         if p_data["cost"] <= 0 or p_data["amount"] <= 0:
             continue
-            
+
         c_match = df_analysis[df_analysis["pair"] == p_coin]
         if not c_match.empty:
             c_price = float(c_match.iloc[0]["last"])
@@ -486,12 +525,12 @@ if not df_analysis.empty:
 
             entry_p = float(p_data["entry_price"])
             cost_p = float(p_data["cost"])
-            
-            # Hedef Kâr Hesaplamaları (% ve TL)
+
+            # Hedef Kâr Hesaplamaları
             target_tp_price = entry_p * (1 + (p_margin / 100))
             target_tp_tl = cost_p * (p_margin / 100)
 
-            # Stop Loss Hesaplamaları (% ve TL)
+            # Stop Loss Hesaplamaları
             target_sl_price = entry_p * (1 - (s_margin / 100))
             target_sl_tl = cost_p * (s_margin / 100)
 
@@ -499,7 +538,7 @@ if not df_analysis.empty:
             pnl = c_val - cost_p
             total_unrealized_pnl += pnl
             pnl_sign = "+" if pnl > 0 else ""
-            
+
             current_portfolio_value = cost_p + pnl
 
             pos_list.append(
@@ -538,9 +577,15 @@ if not df_analysis.empty:
         f"{unrealized_sign}₺{total_unrealized_pnl:,.2f}",
     )
 
-    total_portfolio_val = balance + sum(
-        p_data["cost"] for p_data in bot_positions.values() if p_data["cost"] > 0
-    ) + total_unrealized_pnl
+    total_portfolio_val = (
+        balance
+        + sum(
+            p_data["cost"]
+            for p_data in bot_positions.values()
+            if p_data["cost"] > 0
+        )
+        + total_unrealized_pnl
+    )
     net_total_pnl = total_portfolio_val - 100000.0
 
     if net_total_pnl >= 0:
@@ -558,11 +603,13 @@ if not df_analysis.empty:
     # --- AKTİF AÇIK POZİSYONLAR TABLOSU ---
     if pos_list:
         st.subheader("⚡ Aktif Açık Pozisyonlar & Hedef / Stop Seviyeleri")
-        
+
         df_pos = pd.DataFrame(pos_list)
-        df_pos = df_pos.sort_values(by="current_portfolio_value", ascending=False)
+        df_pos = df_pos.sort_values(
+            by="current_portfolio_value", ascending=False
+        )
         df_pos = df_pos.drop(columns=["current_portfolio_value"])
-        
+
         st.dataframe(df_pos, use_container_width=True)
 
     st.markdown("---")
@@ -596,5 +643,7 @@ if not df_analysis.empty:
     st.components.v1.html(tradingview_html, height=520)
 
     if not trade_history_df.empty:
-        st.subheader("📜 AquiverAI 7/24 İşlem Geçmişi (Alım & Satış Saatleri)")
+        st.subheader(
+            "📜 AquiverAI 7/24 İşlem Geçmişi (Alım & Satış Saatleri)"
+        )
         st.dataframe(trade_history_df, use_container_width=True)
