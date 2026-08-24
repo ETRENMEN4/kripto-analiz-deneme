@@ -4,11 +4,16 @@ import time
 import pandas as pd
 import requests
 import streamlit as st
+from streamlit_autorefresh import st_autorefresh
 
 # Streamlit Arayüz Ayarları
 st.set_page_config(
     page_title="BtcTurk AI & AquiverAI 7/24 Bot (TRY)", layout="wide"
 )
+
+# 🔄 OTOMATİK YENİLEME: Sayfayı F5 atmaya gerek kalmadan 10 saniyede bir yeniler
+st_autorefresh(interval=10 * 1000, key="bot_refresh")
+
 st.title("📈 BtcTurk Canlı Analiz & 7/24 Otomatik AquiverAI Botu (TRY)")
 
 # --- VERİTABANI KURULUMU VE YÖNETİMİ ---
@@ -288,7 +293,7 @@ def run_aquiver_bot_cycle():
                 )
                 balance = new_balance
 
-    # 2. Dynamic Alım Mantığı (%20 Tavan Sınırı)
+    # 2. Dynamic Alım Mantığı (Yüksek tutarlı alımlar için %20 tavanı düzenlendi)
     bullish_candidates = df_analysis[
         (df_analysis["is_bullish"] == True)
         & (~df_analysis["pair"].isin(positions.keys()))
@@ -305,13 +310,12 @@ def run_aquiver_bot_cycle():
         buy_price = float(target_buy_coin["last"])
         score = float(target_buy_coin["score"])
 
-        # Kasadaki anlık serbest bakiyenin %20'si üst sınır belirlenir
-        cap_limit = balance * 0.20
-        calculated_amount = min_buy_setting + (score * 50)
-        desired_amount = min(calculated_amount, cap_limit)
-
+        # Skor bazlı dinamik bakiye (kullanıcının belirlediği min-max sınırları dikkate alınır)
+        calculated_amount = min_buy_setting + (max(score, 1.0) * 150)
+        
+        # Eğer bakiye elveriyorsa min_buy ile max_buy arasında ideal alımı yapar
         buy_amount_try = round(
-            min(max(desired_amount, min_buy_setting), max_buy_setting, balance), 2
+            min(max(calculated_amount, min_buy_setting), max_buy_setting, balance), 2
         )
 
         if buy_amount_try >= min_buy_setting and buy_amount_try <= max_buy_setting and buy_price > 0:
@@ -349,7 +353,7 @@ def background_loop():
             run_aquiver_bot_cycle()
         except Exception:
             pass
-        time.sleep(30)
+        time.sleep(10)
 
 
 @st.cache_resource
