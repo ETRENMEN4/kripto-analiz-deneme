@@ -390,6 +390,7 @@ def live_dashboard():
 
     # --- TOPLAM KÂR/ZARAR HESAPLAMASI VE POZİSYONLAR ---
     total_unrealized_pnl = 0.0
+    total_positions_current_val = 0.0
     pos_list = []
     for p_coin, p_data in bot_positions.items():
         if p_data["cost"] <= 0 or p_data["amount"] <= 0:
@@ -413,6 +414,7 @@ def live_dashboard():
             c_val = p_data["amount"] * c_price
             pnl = c_val - cost_p
             total_unrealized_pnl += pnl
+            total_positions_current_val += c_val
             pnl_sign = "+" if pnl > 0 else ""
 
             current_portfolio_value = cost_p + pnl
@@ -453,15 +455,7 @@ def live_dashboard():
         f"{unrealized_sign}₺{total_unrealized_pnl:,.2f}",
     )
 
-    total_portfolio_val = (
-        balance
-        + sum(
-            p_data["cost"]
-            for p_data in bot_positions.values()
-            if p_data["cost"] > 0
-        )
-        + total_unrealized_pnl
-    )
+    total_portfolio_val = balance + total_positions_current_val
     net_total_pnl = total_portfolio_val - 100000.0
 
     if net_total_pnl >= 0:
@@ -474,6 +468,13 @@ def live_dashboard():
         f"₺{net_total_pnl:,.2f}",
         delta=pnl_delta_str,
         delta_color="normal",
+    )
+
+    st.markdown("---")
+
+    # 📊 BTCTURK BENZERİ YEŞİL BİLGİ KUTUSU
+    st.success(
+        f"📊 **BtcTurk Hesabınızın Toplam Tahmini Değeri: ₺{total_portfolio_val:,.2f}**"
     )
 
     # --- AKTİF AÇIK POZİSYONLAR TABLOSU ---
