@@ -1,6 +1,7 @@
 import sqlite3
 import threading
 import time
+from datetime import datetime, timedelta
 import pandas as pd
 import requests
 import streamlit as st
@@ -8,10 +9,10 @@ import streamlit.components.v1 as components
 
 # Streamlit Arayüz Ayarları
 st.set_page_config(
-    page_title="BtcTurk AI & AquiverAI 7/24 Bot (TRY)", layout="wide"
+    page_title="BtcTurk AI & AquiverAI 7/24 Bot (TRY - Korumalı 20k)", layout="wide"
 )
 
-st.title("📈 BtcTurk Canlı Analiz & 7/24 Otomatik AquiverAI Botu (TRY)")
+st.title("📈 BtcTurk Canlı Analiz & 7/24 Otomatik AquiverAI Botu (Sabit 20k Tavan + Tam Korumalı)")
 
 # --- VERİTABANI KURULUMU VE YÖNETİMİ ---
 DB_FILE = "aquiver_bot_try.db"
@@ -27,33 +28,11 @@ def init_db():
     if cursor.fetchone()[0] == 0:
         cursor.execute("INSERT INTO balance (id, amount) VALUES (1, 100000.0)")
 
-    # Ayarlar Tablosu
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS settings (
-            id INTEGER PRIMARY KEY,
-            min_buy_amount REAL,
-            max_buy_amount REAL
-        )
-    """)
-    cursor.execute("SELECT COUNT(*) FROM settings")
-    if cursor.fetchone()[0] == 0:
-        cursor.execute(
-            "INSERT INTO settings (id, min_buy_amount, max_buy_amount) VALUES (1, 100.0, 100000.0)"
-        )
-
-    # Migration
-    try:
-        cursor.execute(
-            "ALTER TABLE settings ADD COLUMN max_buy_amount REAL DEFAULT 100000.0"
-        )
-        conn.commit()
-    except sqlite3.OperationalError:
-        pass
-
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS positions (
             pair TEXT PRIMARY KEY,
             entry_price REAL,
+            highest_price REAL,
             amount REAL,
             cost REAL,
             bought_at DATETIME DEFAULT CURRENT_TIMESTAMP
@@ -72,18 +51,8 @@ def init_db():
         )
     """)
 
-    # 0 veya negatif olan hatalı pozisyonları sil
     cursor.execute("DELETE FROM positions WHERE cost <= 0 OR amount <= 0")
     conn.commit()
-
-    try:
-        cursor.execute(
-            "ALTER TABLE positions ADD COLUMN bought_at DATETIME DEFAULT CURRENT_TIMESTAMP"
-        )
-        conn.commit()
-    except sqlite3.OperationalError:
-        pass
-
     conn.close()
 
 
@@ -93,27 +62,6 @@ init_db()
 def get_db_data():
     conn = sqlite3.connect(DB_FILE)
     balance = conn.cursor().execute("SELECT amount FROM balance").fetchone()[0]
-
-    try:
-        settings_row = (
-            conn.cursor()
-            .execute(
-                "SELECT min_buy_amount, max_buy_amount FROM settings WHERE id = 1"
-            )
-            .fetchone()
-        )
-        min_buy = (
-            float(settings_row[0])
-            if settings_row and settings_row[0] is not None
-            else 100.0
-        )
-        max_buy = (
-            float(settings_row[1])
-            if settings_row and settings_row[1] is not None
-            else 100000.0
-        )
-    except sqlite3.OperationalError:
-        min_buy, max_buy = 100.0, 100000.0
 
     positions_df = pd.read_sql_query(
         "SELECT * FROM positions WHERE cost > 0 AND amount > 0", conn
@@ -128,6 +76,7 @@ def get_db_data():
     for _, row in positions_df.iterrows():
         positions_dict[row["pair"]] = {
             "entry_price": float(row["entry_price"]),
+            "highest_price": float(row.get("highest_price", row["entry_price"])),
             "amount": float(row["amount"]),
             "cost": float(row["cost"]),
             "bought_at": row.get("bought_at", "—"),
@@ -137,20 +86,7 @@ def get_db_data():
         float(balance),
         positions_dict,
         history_df,
-        min_buy,
-        max_buy,
     )
-
-
-def update_settings(min_buy, max_buy):
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute(
-        "UPDATE settings SET min_buy_amount = ?, max_buy_amount = ? WHERE id = 1",
-        (min_buy, max_buy),
-    )
-    conn.commit()
-    conn.close()
 
 
 def reset_db():
@@ -215,6 +151,28 @@ def fetch_btcturk_analysis():
         return pd.DataFrame()
 
 
+def is_market_safe(cursor, is_btc_bullish):
+    """
+    Piyasa güvenliği kontrolü:
+    1. BTC negatifse ALIM YAPMAZ.
+    2. Son 1 saatte 2+ stop varsa VE piyasa henüz toparlanmadıysa ALIM YAPMAZ.
+    """
+    if not is_btc_bullish:
+        return False
+
+    one_hour_ago = datetime.now() - timedelta(hours=1)
+    cursor.execute(
+        "SELECT COUNT(*) FROM history WHERE type='SATIŞ' AND status LIKE '%STOP%' AND timestamp >= ?",
+        (one_hour_ago,),
+    )
+    recent_stops = cursor.fetchone()[0]
+
+    if recent_stops >= 2 and not is_btc_bullish:
+        return False
+
+    return True
+
+
 # --- ARKA PLAN VE ANLIK TRADING MOTORU ---
 def run_aquiver_bot_cycle():
     df_analysis = fetch_btcturk_analysis()
@@ -224,50 +182,26 @@ def run_aquiver_bot_cycle():
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
 
-    # Hatalı kayıtları temizle
     cursor.execute("DELETE FROM positions WHERE cost <= 0 OR amount <= 0")
     conn.commit()
 
     balance = float(cursor.execute("SELECT amount FROM balance").fetchone()[0])
-
-    try:
-        settings_row = cursor.execute(
-            "SELECT min_buy_amount, max_buy_amount FROM settings WHERE id = 1"
-        ).fetchone()
-        min_buy_setting = (
-            float(settings_row[0])
-            if settings_row and settings_row[0] is not None
-            else 100.0
-        )
-        max_buy_setting = (
-            float(settings_row[1])
-            if settings_row and settings_row[1] is not None
-            else 100000.0
-        )
-    except Exception:
-        min_buy_setting, max_buy_setting = 100.0, 100000.0
 
     positions_df = pd.read_sql_query(
         "SELECT * FROM positions WHERE cost > 0 AND amount > 0", conn
     )
 
     positions = {}
-    total_unrealized_pnl = 0.0
-
     for _, row in positions_df.iterrows():
         p_coin = row["pair"]
         positions[p_coin] = {
             "entry_price": float(row["entry_price"]),
+            "highest_price": float(row.get("highest_price", row["entry_price"])),
             "amount": float(row["amount"]),
             "cost": float(row["cost"]),
         }
-        c_match = df_analysis[df_analysis["pair"] == p_coin]
-        if not c_match.empty:
-            c_price = float(c_match.iloc[0]["last"])
-            c_val = float(row["amount"]) * c_price
-            total_unrealized_pnl += c_val - float(row["cost"])
 
-    # 1. Açık Pozisyonların Takibi & Kâr/Zarar Satışı
+    # 1. Açık Pozisyonların Takibi & İZ SÜREN STOP (TRAILING STOP)
     for pos_coin, pos_data in list(positions.items()):
         coin_match = df_analysis[df_analysis["pair"] == pos_coin]
         if not coin_match.empty:
@@ -276,11 +210,22 @@ def run_aquiver_bot_cycle():
             s_margin = float(coin_match.iloc[0]["stop_margin"])
 
             entry_p = pos_data["entry_price"]
+            highest_p = max(pos_data["highest_price"], curr_price)
+
+            # Zirve fiyatı güncelle
+            cursor.execute(
+                "UPDATE positions SET highest_price = ? WHERE pair = ?",
+                (highest_p, pos_coin),
+            )
+
             pnl_pct = ((curr_price - entry_p) / entry_p) * 100
             current_val = pos_data["amount"] * curr_price
             pnl_amount = current_val - pos_data["cost"]
 
-            if pnl_pct >= p_margin or pnl_pct <= -s_margin:
+            # İz süren stop fiyatı (En yüksek seviyeden % stop kadar düşerse satar)
+            trailing_stop_price = highest_p * (1 - (s_margin / 100))
+
+            if pnl_pct >= p_margin or curr_price <= trailing_stop_price:
                 new_balance = balance + current_val
                 cursor.execute(
                     "UPDATE balance SET amount = ? WHERE id = 1",
@@ -293,7 +238,7 @@ def run_aquiver_bot_cycle():
                 status_text = (
                     "KÂR İLE KAPATILDI"
                     if pnl_amount > 0
-                    else "ZARAR KES (STOP) YAPILDI"
+                    else "İZ SÜREN STOP YAPILDI"
                 )
                 pnl_sign = "+" if pnl_amount > 0 else ""
                 cursor.execute(
@@ -308,73 +253,64 @@ def run_aquiver_bot_cycle():
                 )
                 balance = new_balance
 
-    # 2. Dynamic Alım Mantığı
-    bullish_candidates = df_analysis[
-        (df_analysis["is_bullish"] == True)
-        & (~df_analysis["pair"].isin(positions.keys()))
-    ]
+    # 2. Piyasa Düzelme Mantığına Göre Alım Yapma
+    btc_match = df_analysis[df_analysis["pair"] == "BTCTRY"]
+    is_btc_bullish = btc_match.iloc[0]["is_bullish"] if not btc_match.empty else True
 
-    if bullish_candidates.empty:
+    # Piyasa tamamen güvenli ve toparlanmışsa alım yap
+    if is_market_safe(cursor, is_btc_bullish):
         bullish_candidates = df_analysis[
-            ~df_analysis["pair"].isin(positions.keys())
+            (df_analysis["is_bullish"] == True)
+            & (~df_analysis["pair"].isin(positions.keys()))
         ]
 
-    if not bullish_candidates.empty and balance >= min_buy_setting:
-        target_buy_coin = bullish_candidates.iloc[0]
-        buy_symbol = str(target_buy_coin["pair"])
-        buy_price = float(target_buy_coin["last"])
-        score = float(target_buy_coin["score"])
+        if bullish_candidates.empty:
+            bullish_candidates = df_analysis[
+                ~df_analysis["pair"].isin(positions.keys())
+            ]
 
-        calculated_amount = min_buy_setting + (max(score, 1.0) * 150)
+        if not bullish_candidates.empty and balance >= 100.0:
+            target_buy_coin = bullish_candidates.iloc[0]
+            buy_symbol = str(target_buy_coin["pair"])
+            buy_price = float(target_buy_coin["last"])
+            score = float(target_buy_coin["score"])
 
-        buy_amount_try = round(
-            min(
-                max(calculated_amount, min_buy_setting),
-                max_buy_setting,
-                balance,
-            ),
-            2,
-        )
+            TARGET_MAX_TRADE = 20000.0
+            buy_amount_try = round(min(balance, TARGET_MAX_TRADE), 2)
 
-        if (
-            buy_amount_try >= min_buy_setting
-            and buy_amount_try <= max_buy_setting
-            and buy_price > 0
-        ):
-            coin_qty = buy_amount_try / buy_price
-            new_balance = balance - buy_amount_try
+            if buy_amount_try >= 100.0 and buy_price > 0:
+                coin_qty = buy_amount_try / buy_price
+                new_balance = balance - buy_amount_try
 
-            cursor.execute(
-                "UPDATE balance SET amount = ? WHERE id = 1", (new_balance,)
-            )
-            cursor.execute(
-                "INSERT INTO positions (pair, entry_price, amount, cost) VALUES (?, ?, ?, ?)",
-                (buy_symbol, buy_price, coin_qty, buy_amount_try),
-            )
-            cursor.execute(
-                "INSERT INTO history (pair, type, price, pnl, status) VALUES (?, ?, ?, ?, ?)",
-                (
-                    buy_symbol,
-                    "ALIM",
-                    f"₺{buy_price:,.2f}",
-                    "₺0.00",
-                    f"AquiverAI Pozisyon Açtı (Skor: {score:.1f})",
-                ),
-            )
+                cursor.execute(
+                    "UPDATE balance SET amount = ? WHERE id = 1", (new_balance,)
+                )
+                cursor.execute(
+                    "INSERT INTO positions (pair, entry_price, highest_price, amount, cost) VALUES (?, ?, ?, ?, ?)",
+                    (buy_symbol, buy_price, buy_price, coin_qty, buy_amount_try),
+                )
+                cursor.execute(
+                    "INSERT INTO history (pair, type, price, pnl, status) VALUES (?, ?, ?, ?, ?)",
+                    (
+                        buy_symbol,
+                        "ALIM",
+                        f"₺{buy_price:,.2f}",
+                        "₺0.00",
+                        f"Sabit Tavan Alımı (₺{buy_amount_try:,.2f} - Skor: {score:.1f})",
+                    ),
+                )
 
     conn.commit()
     conn.close()
 
 
 # --- OTOMATİK CANLI EKRAN VE MOTOR DÖNGÜSÜ ---
-@st.fragment(run_every=5)  # ⚡ EKRANI VE BOTU HER 5 SANİYEDE BİR SIFIR F5 İLE YENİLER
+@st.fragment(run_every=5)
 def live_dashboard():
     run_aquiver_bot_cycle()
-    
+
     df_analysis = fetch_btcturk_analysis()
-    balance, bot_positions, trade_history_df, current_min_buy, current_max_buy = (
-        get_db_data()
-    )
+    balance, bot_positions, trade_history_df = get_db_data()
 
     if df_analysis.empty:
         st.warning("BtcTurk API verisi alınamadı, bekleniyor...")
@@ -388,7 +324,6 @@ def live_dashboard():
     if st.session_state.selected_coin not in pairs_list:
         st.session_state.selected_coin = pairs_list[0]
 
-    # --- TOPLAM KÂR/ZARAR HESAPLAMASI VE POZİSYONLAR ---
     total_unrealized_pnl = 0.0
     total_positions_current_val = 0.0
     pos_list = []
@@ -443,11 +378,14 @@ def live_dashboard():
         coin_data["low"],
     )
 
+    btc_match = df_analysis[df_analysis["pair"] == "BTCTRY"]
+    btc_status = btc_match.iloc[0]["is_bullish"] if not btc_match.empty else True
+
     st.markdown("---")
-    st.subheader("🤖 AquiverAI Sanal TRY Portföyü (7/24 Canlı - Otomatik Akış)")
+    st.subheader("🤖 AquiverAI Sanal TRY Portföyü (Sabit 20k Tavan + Tam Korumalı)")
     b1, b2, b3, b4 = st.columns(4)
     b1.metric("Kasadaki Sanal Bakiye", f"₺{balance:,.2f}")
-    b2.metric("Aktif Açık Pozisyon", len(pos_list))
+    b2.metric("BTC Trend Durumu", "🟢 Pozitif (Alım Açık)" if btc_status else "🔴 Negatif (Piyasa Beklemede)")
 
     unrealized_sign = "+" if total_unrealized_pnl > 0 else ""
     b3.metric(
@@ -472,12 +410,10 @@ def live_dashboard():
 
     st.markdown("---")
 
-    # 📊 BTCTURK BENZERİ YEŞİL BİLGİ KUTUSU
     st.success(
         f"📊 **BtcTurk Hesabınızın Toplam Tahmini Değeri: ₺{total_portfolio_val:,.2f}**"
     )
 
-    # --- AKTİF AÇIK POZİSYONLAR TABLOSU ---
     if pos_list:
         st.subheader("⚡ Aktif Açık Pozisyonlar & Hedef / Stop Seviyeleri")
 
@@ -502,7 +438,7 @@ def live_dashboard():
         st.dataframe(trade_history_df, use_container_width=True)
 
 
-# Sidebar ve Dashboard Çağır
+# Sidebar ve Dashboard
 df_initial = fetch_btcturk_analysis()
 if not df_initial.empty:
     pairs_list = df_initial["pair"].tolist()
@@ -522,5 +458,4 @@ if not df_initial.empty:
         reset_db()
         st.rerun()
 
-# Canlı Paneli Çalıştır
 live_dashboard()
