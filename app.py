@@ -18,6 +18,11 @@ st.title("📈 BtcTurk Canlı Analiz & 7/24 Otomatik AquiverAI Botu (Dinamik Al�
 DB_FILE = "aquiver_bot_try.db"
 
 
+def get_current_time_str():
+    """Yerel saat dilimine göre tarih ve saat döndürür."""
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
 def init_db():
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
@@ -55,7 +60,7 @@ def init_db():
             highest_price REAL,
             amount REAL,
             cost REAL,
-            bought_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            bought_at TEXT
         )
     """)
 
@@ -65,9 +70,7 @@ def init_db():
         pass
 
     try:
-        cursor.execute(
-            "ALTER TABLE positions ADD COLUMN bought_at DATETIME DEFAULT CURRENT_TIMESTAMP"
-        )
+        cursor.execute("ALTER TABLE positions ADD COLUMN bought_at TEXT")
     except sqlite3.OperationalError:
         pass
 
@@ -79,7 +82,7 @@ def init_db():
             price TEXT,
             pnl TEXT,
             status TEXT,
-            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+            timestamp TEXT
         )
     """)
 
@@ -187,7 +190,6 @@ def fetch_btcturk_analysis():
                     continue
 
                 volatility = ((high - low) / low) * 100 if low > 0 else 5.0
-                # Hedef kâr marjı minimum %5.0 olarak güncellendi
                 ai_profit_margin = round(
                     max(5.0, min(volatility / 2, 100.0)), 1
                 )
@@ -225,7 +227,7 @@ def is_market_safe(cursor, is_btc_bullish):
     if not is_btc_bullish:
         return False
 
-    one_hour_ago = datetime.now() - timedelta(hours=1)
+    one_hour_ago = (datetime.now() - timedelta(hours=1)).strftime("%Y-%m-%d %H:%M:%S")
     cursor.execute(
         "SELECT COUNT(*) FROM history WHERE type='SATIŞ' AND status LIKE '%STOP%' AND timestamp >= ?",
         (one_hour_ago,),
@@ -325,13 +327,14 @@ def run_aquiver_bot_cycle():
                 )
                 pnl_sign = "+" if pnl_amount > 0 else ""
                 cursor.execute(
-                    "INSERT INTO history (pair, type, price, pnl, status) VALUES (?, ?, ?, ?, ?)",
+                    "INSERT INTO history (pair, type, price, pnl, status, timestamp) VALUES (?, ?, ?, ?, ?, ?)",
                     (
                         pos_coin,
                         "SATIŞ",
                         f"₺{curr_price:,.2f}",
                         f"{pnl_sign}₺{pnl_amount:,.2f}",
                         status_text,
+                        get_current_time_str(),
                     ),
                 )
                 balance = new_balance
@@ -375,22 +378,24 @@ def run_aquiver_bot_cycle():
             ):
                 coin_qty = buy_amount_try / buy_price
                 new_balance = balance - buy_amount_try
+                now_str = get_current_time_str()
 
                 cursor.execute(
                     "UPDATE balance SET amount = ? WHERE id = 1", (new_balance,)
                 )
                 cursor.execute(
-                    "INSERT INTO positions (pair, entry_price, highest_price, amount, cost) VALUES (?, ?, ?, ?, ?)",
-                    (buy_symbol, buy_price, buy_price, coin_qty, buy_amount_try),
+                    "INSERT INTO positions (pair, entry_price, highest_price, amount, cost, bought_at) VALUES (?, ?, ?, ?, ?, ?)",
+                    (buy_symbol, buy_price, buy_price, coin_qty, buy_amount_try, now_str),
                 )
                 cursor.execute(
-                    "INSERT INTO history (pair, type, price, pnl, status) VALUES (?, ?, ?, ?, ?)",
+                    "INSERT INTO history (pair, type, price, pnl, status, timestamp) VALUES (?, ?, ?, ?, ?, ?)",
                     (
                         buy_symbol,
                         "ALIM",
                         f"₺{buy_price:,.2f}",
                         "₺0.00",
                         f"AquiverAI Pozisyon Açtı (Skor: {score:.1f})",
+                        now_str,
                     ),
                 )
 
