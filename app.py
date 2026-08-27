@@ -131,6 +131,19 @@ def reset_db():
     conn.close()
 
 
+# --- PİYASA DUYGU DURUMU (FEAR & GREED INDEX) ---
+def fetch_fear_and_greed_index():
+    """Kripto piyasası Korku ve Açgözlülük İndeksini çeker."""
+    try:
+        url = "https://api.alternative.me/fng/"
+        res = requests.get(url, timeout=5).json()
+        val = int(res["data"][0]["value"])
+        text = res["data"][0]["value_classification"]
+        return val, text
+    except Exception:
+        return 50, "Neutral"  # Bağlantı hatasında nötr kabul et
+
+
 def fetch_btcturk_analysis():
     try:
         ticker_url = "https://api.btcturk.com/api/v2/ticker"
@@ -178,8 +191,17 @@ def fetch_btcturk_analysis():
         return pd.DataFrame()
 
 
-def is_market_safe(cursor, is_btc_bullish):
+def is_market_safe(cursor, is_btc_bullish, fng_value):
+    """
+    İki Aşamalı Güvenlik: 
+    1. BTC Trend Kontrolü 
+    2. Piyasa Psikolojisi (20 < F&G < 80)
+    """
     if not is_btc_bullish:
+        return False
+
+    # Extreme Greed (> 80) veya Extreme Fear (< 20) durumunda yeni alımları kilitle
+    if fng_value > 80 or fng_value < 20:
         return False
 
     utc_now = datetime.now(timezone.utc)
@@ -191,7 +213,7 @@ def is_market_safe(cursor, is_btc_bullish):
     )
     recent_stops = cursor.fetchone()[0]
 
-    if recent_stops >= 2 and not is_btc_bullish:
+    if recent_stops >= 2:
         return False
 
     return True
@@ -202,6 +224,8 @@ def run_aquiver_bot_cycle():
     df_analysis = fetch_btcturk_analysis()
     if df_analysis.empty:
         return
+
+    fng_val, fng_text = fetch_fear_and_greed_index()
 
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
@@ -238,7 +262,10 @@ def run_aquiver_bot_cycle():
             "cost": float(row["cost"]),
         }
 
-    # Açık Pozisyonların Takibi & İz Süren Stop
+    btc_match = df_analysis[df_analysis["pair"] == "BTCTRY"]
+    is_btc_bullish = btc_match.iloc[0]["is_bullish"] if not btc_match.empty else True
+
+    # --- AÇIK POZİSYONLARIN TAKİBİ & ZARAR KORUMASI ---
     for pos_coin, pos_data in list(positions.items()):
         coin_match = df_analysis[df_analysis["pair"] == pos_coin]
         if not coin_match.empty:
@@ -260,7 +287,14 @@ def run_aquiver_bot_cycle():
 
             trailing_stop_price = highest_p * (1 - (s_margin / 100))
 
-            if pnl_pct >= p_margin or curr_price <= trailing_stop_price:
+            # ZARAR KORUMASI ŞARTLARI:
+            # 1. Normal Hedef Kâr (% Margin)
+            # 2. İz Süren Stop (Trailing Stop)
+            # 3. BTC Trendinin Bozulması veya Piyasa "Aşırı Korku" (<20) Halinde Zarardaki Pozisyonu Kapatma
+            is_in_loss = pnl_amount < 0
+            emergency_exit = is_in_loss and (not is_btc_bullish or fng_val < 20)
+
+            if pnl_pct >= p_margin or curr_price <= trailing_stop_price or emergency_exit:
                 new_balance = balance + current_val
                 cursor.execute(
                     "UPDATE balance SET amount = ? WHERE id = 1",
@@ -270,11 +304,14 @@ def run_aquiver_bot_cycle():
                     "DELETE FROM positions WHERE pair = ?", (pos_coin,)
                 )
 
-                status_text = (
-                    "KÂR İLE KAPATILDI"
-                    if pnl_amount > 0
-                    else "İZ SÜREN STOP YAPILDI"
-                )
+                if emergency_exit:
+                    reason = "BTC TREND BOZULDU" if not is_btc_bullish else "AŞIRI KORKU ALARMI"
+                    status_text = f"ACİL KORUMA STOPU ({reason})"
+                elif pnl_amount > 0:
+                    status_text = "KÂR İLE KAPATILDI"
+                else:
+                    status_text = "İZ SÜREN STOP YAPILDI"
+
                 pnl_sign = "+" if pnl_amount > 0 else ""
                 cursor.execute(
                     "INSERT INTO history (pair, type, price, pnl, status, timestamp) VALUES (?, ?, ?, ?, ?, ?)",
@@ -289,11 +326,8 @@ def run_aquiver_bot_cycle():
                 )
                 balance = new_balance
 
-    # Yeni Alım Mantığı
-    btc_match = df_analysis[df_analysis["pair"] == "BTCTRY"]
-    is_btc_bullish = btc_match.iloc[0]["is_bullish"] if not btc_match.empty else True
-
-    if is_market_safe(cursor, is_btc_bullish):
+    # --- YENİ ALIM MANTIĞI (İki Aşamalı Güvenlik) ---
+    if is_market_safe(cursor, is_btc_bullish, fng_val):
         bullish_candidates = df_analysis[
             (df_analysis["is_bullish"] == True)
             & (~df_analysis["pair"].isin(positions.keys()))
@@ -343,7 +377,7 @@ def run_aquiver_bot_cycle():
                         "ALIM",
                         f"₺{buy_price:,.2f}",
                         "₺0.00",
-                        f"Dinamik Alım Yapıldı (Tutar: ₺{buy_amount_try:,.2f} | Skor: {score:.1f})",
+                        f"Dinamik Alım Yapıldı (Tutar: ₺{buy_amount_try:,.2f} | F&G: {fng_val})",
                         now_str,
                     ),
                 )
@@ -376,6 +410,7 @@ def live_dashboard():
     balance, bot_positions, trade_history_df, current_min_buy, current_max_buy = (
         get_db_data()
     )
+    fng_val, fng_text = fetch_fear_and_greed_index()
 
     if df_analysis.empty:
         st.warning("BtcTurk API verisi alınamadı, bekleniyor...")
@@ -447,20 +482,25 @@ def live_dashboard():
     btc_status = btc_match.iloc[0]["is_bullish"] if not btc_match.empty else True
 
     st.markdown("---")
-    st.subheader("🤖 AquiverAI Sanal TRY Portföyü")
+    st.subheader("🤖 AquiverAI Sanal TRY Portföyü & Risk Göstergeleri")
+    
+    # Metrikleri Göster
     b1, b2, b3, b4 = st.columns(4)
     b1.metric("Kasadaki Sanal Bakiye", f"₺{balance:,.2f}")
-    b2.metric("BTC Trend Durumu", "🟢 Pozitif (Alım Açık)" if btc_status else "🔴 Negatif (Piyasa Beklemede)")
+    b2.metric("BTC Trend Durumu", "🟢 Pozitif" if btc_status else "🔴 Negatif (Acil Stop Etkin)")
 
-    unrealized_sign = "+" if total_unrealized_pnl > 0 else ""
-    b3.metric(
-        "Açık Pozisyonlar Kâr/Zarar",
-        f"{unrealized_sign}₺{total_unrealized_pnl:,.2f}",
-    )
+    # Piyasa Psikolojisi Durum Metni
+    if fng_val > 80:
+        fng_display = f"🔥 {fng_val}/100 - Aşırı Açgözlülük (Alımlar Kilitlendi)"
+    elif fng_val < 20:
+        fng_display = f"😱 {fng_val}/100 - Aşırı Korku (Zarardakiler Kapatılıyor)"
+    else:
+        fng_display = f"⚖️ {fng_val}/100 - {fng_text}"
+
+    b3.metric("Piyasa Psikolojisi (F&G)", fng_display)
 
     total_portfolio_val = balance + total_positions_current_val
     net_total_pnl = total_portfolio_val - 100000.0
-
     pnl_delta_str = f"+₺{net_total_pnl:,.2f}" if net_total_pnl >= 0 else f"-₺{abs(net_total_pnl):,.2f}"
 
     b4.metric(
